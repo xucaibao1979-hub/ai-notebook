@@ -1,0 +1,11 @@
+import {it,expect,vi,beforeEach} from 'vitest';
+const m=vi.hoisted(()=>({session:vi.fn(),user:vi.fn(),review:vi.fn(),collect:vi.fn()}));
+vi.mock('next-auth',()=>({getServerSession:m.session}));
+vi.mock('@/lib/auth',()=>({authOptions:{}}));
+vi.mock('@/lib/prisma',()=>({prisma:{user:{findUniqueOrThrow:m.user},homeworkReview:{findFirst:m.review},$transaction:async(fn:(tx:object)=>unknown)=>fn({})}}));
+vi.mock('@/lib/homework-collection',()=>({collectHomeworkQuestion:m.collect}));
+import {POST} from '@/app/api/homework/manual/route';
+const question={number:'Part 1-I-1',subject:'英语',questionText:'Listen and choose: A or B',studentAnswer:'A',answerText:'缺少音频依据',analysis:'缺少音频依据',judgement:'unclear',knowledgePoints:[]};
+const request=(q:object)=>new Request('http://localhost/api/homework/manual',{method:'POST',body:JSON.stringify({question:q,reviewId:'review',index:0})});
+beforeEach(()=>{vi.clearAllMocks();m.session.mockResolvedValue({user:{id:'kid'}});m.user.mockResolvedValue({currentGrade:5});m.review.mockResolvedValue({id:'review'});m.collect.mockResolvedValue({id:'saved'});});
+it('collects an uncertain question directly while preserving its pending answer status',async()=>{const response=await POST(request(question));expect(response.status).toBe(200);expect(await response.json()).toEqual({id:'saved'});expect(m.review.mock.calls[0][0].where).toEqual({id:'review',userId:'kid'});expect(m.collect.mock.calls[0][2].image).toBe('');expect(m.collect.mock.calls[0][4].judgement).toBe('unclear');expect(m.collect.mock.calls[0][4].answerText).toBe('缺少音频依据');expect(m.collect.mock.calls[0][6]).toBe('homework-manual');});

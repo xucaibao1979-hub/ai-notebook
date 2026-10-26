@@ -1,0 +1,10 @@
+import {it,expect,vi,beforeEach} from 'vitest';
+const m=vi.hoisted(()=>({session:vi.fn(),item:vi.fn(),review:vi.fn()}));
+vi.mock('next-auth',()=>({getServerSession:m.session}));
+vi.mock('@/lib/auth',()=>({authOptions:{}}));
+vi.mock('@/lib/prisma',()=>({prisma:{errorItem:{findFirst:m.item},homeworkReview:{findFirst:m.review}}}));
+import {GET} from '@/app/api/homework/source/route';
+const request=()=>new Request('http://localhost/api/homework/source?itemId=error');
+const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=';
+beforeEach(()=>{vi.clearAllMocks();m.session.mockResolvedValue({user:{id:'kid'}});m.item.mockResolvedValue({source:'homework-manual:review:3'});m.review.mockResolvedValue({image,createdAt:new Date('2026-10-12T02:00:00Z')});});
+it('returns one shared photo and upload time only to the owning identity',async()=>{const response=await GET(request());expect(response.status).toBe(200);expect(await response.json()).toEqual({image,uploadedAt:'2026-10-12T02:00:00.000Z'});expect(m.item.mock.calls[0][0].where).toEqual({id:'error',userId:'kid'});expect(m.review.mock.calls[0][0].where).toEqual({id:'review',userId:'kid'});m.session.mockResolvedValue(null);expect((await GET(request())).status).toBe(401);});

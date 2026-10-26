@@ -1,0 +1,1 @@
+ALTER TABLE "AIUsage" ADD COLUMN "errorReason" TEXT;

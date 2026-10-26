@@ -1,0 +1,14 @@
+import {beforeEach,it,expect,vi} from 'vitest';
+const m=vi.hoisted(()=>({session:vi.fn(),user:vi.fn(),review:vi.fn(),update:vi.fn(),find:vi.fn(),remove:vi.fn(),collect:vi.fn()}));
+vi.mock('next-auth',()=>({getServerSession:m.session}));vi.mock('@/lib/auth',()=>({authOptions:{}}));
+vi.mock('@/lib/homework-collection',()=>({collectHomeworkQuestion:m.collect}));
+vi.mock('@/lib/prisma',()=>({prisma:{user:{findUniqueOrThrow:m.user},$transaction:async(fn:any)=>fn({homeworkReview:{findFirst:m.review,updateMany:m.update},errorItem:{findFirst:m.find,update:m.remove}})}}));
+import {POST} from '@/app/api/homework/collect/route';
+const question={number:'1',subject:'数学',questionText:'1+1=?',studentAnswer:'3',answerText:'2',analysis:'相加',judgement:'wrong',knowledgePoints:[]};
+const request=(action='keep',q=question)=>new Request('http://localhost/homework/collect',{method:'POST',body:JSON.stringify({id:'review',index:0,question:q,action})});
+beforeEach(()=>{vi.clearAllMocks();m.session.mockResolvedValue({user:{id:'kid'}});m.user.mockResolvedValue({currentGrade:5});m.review.mockResolvedValue({id:'review',image:'photo',questions:JSON.stringify([question])});m.update.mockResolvedValue({count:1});m.find.mockResolvedValue({id:'item'});m.remove.mockResolvedValue({id:'item'});m.collect.mockResolvedValue({id:'item'});});
+it('persists keep confirmation and scopes ownership',async()=>{expect((await POST(request())).status).toBe(200);expect(m.review.mock.calls[0][0].where).toEqual({id:'review',userId:'kid'});expect(JSON.parse(m.update.mock.calls[0][0].data.questions)[0].retention).toBe('kept');expect(m.collect).toHaveBeenCalledTimes(1);});
+it('soft removes an owned collection without destroying the photo',async()=>{const response=await POST(request('remove'));expect(await response.json()).toEqual({id:'item',removed:true});expect(m.find.mock.calls[0][0].where).toEqual({userId:'kid',source:'homework:review:0'});expect(m.remove.mock.calls[0][0].data.archivedAt).toBeInstanceOf(Date);expect(m.collect).not.toHaveBeenCalled();});
+it('rejects foreign reviews',async()=>{m.review.mockResolvedValue(null);expect((await POST(request())).status).toBe(400);expect(m.update).not.toHaveBeenCalled();});
+it('rejects unclear or correct questions on retention',async()=>{for(const judgement of ['correct','unclear','unanswered'])expect((await POST(request('keep',{...question,judgement}))).status).toBe(400);expect(m.collect).not.toHaveBeenCalled();});
+it('rejects stale writes before changing collected items',async()=>{m.update.mockResolvedValue({count:0});expect((await POST(request())).status).toBe(400);expect(m.collect).not.toHaveBeenCalled();});

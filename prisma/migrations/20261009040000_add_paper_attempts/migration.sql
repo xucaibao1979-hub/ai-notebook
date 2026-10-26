@@ -1,0 +1,2 @@
+CREATE TABLE "PaperAttempt" ("id" TEXT NOT NULL PRIMARY KEY, "userId" TEXT NOT NULL, "paperId" TEXT NOT NULL, "answers" TEXT NOT NULL DEFAULT '{}', "completed" BOOLEAN NOT NULL DEFAULT false, "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" DATETIME NOT NULL);
+CREATE INDEX "PaperAttempt_userId_paperId_updatedAt_idx" ON "PaperAttempt"("userId", "paperId", "updatedAt");

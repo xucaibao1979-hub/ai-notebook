@@ -1,0 +1,38 @@
+// Run only against a disposable database with DATABASE_URL explicitly set.
+const assert=require('node:assert/strict');
+const {prisma}=require('../src/lib/prisma.ts');
+const {createBackup,validateBackup,restoreBackup}=require('../src/lib/complete-backup.ts');
+if(!process.env.DATABASE_URL?.includes('upgrade-verification'))throw new Error('Refusing to test on a non-disposable database');
+(async()=>{
+ await prisma.paperAttempt.deleteMany({});await prisma.user.deleteMany({});await prisma.knowledgePaper.deleteMany({});
+ const user=await prisma.user.create({data:{email:'backup-test@localhost',password:'test-only',currentGrade:5,examDate:'2031-06-15',studyPreferences:JSON.stringify({textbook:'人教版',semester:'上学期',chapter:'分数',dailyMinutes:20})}});
+ const fs=require('node:fs');const image=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==','base64');fs.mkdirSync('public/uploads',{recursive:true});fs.writeFileSync('public/uploads/upgrade-verification.png',image);
+ const subject=await prisma.subject.create({data:{userId:user.id,name:'数学'}});
+ const parent=await prisma.knowledgeTag.create({data:{userId:user.id,name:'第一章',subject:'数学'}});
+ const tag=await prisma.knowledgeTag.create({data:{userId:user.id,name:'分数',subject:'数学',parentId:parent.id}});
+ const error=await prisma.errorItem.create({data:{userId:user.id,subjectId:subject.id,originalImageUrl:'/uploads/upgrade-verification.png',questionText:'1/2+1/4=?',tags:{connect:{id:tag.id}},reviewSchedules:{create:{scheduledFor:new Date()}}}});
+ const set=await prisma.learningSet.create({data:{userId:user.id,dateKey:'2026-10-10',selectionKey:'test',source:'ai',title:'数学练习',favorited:true,favoriteIndices:'[0]',questions:JSON.stringify([{questionText:'1+1=?',answerText:'2',analysis:'相加',subject:'数学',knowledgePoints:['分数'],difficulty:'easy',provenance:{name:'test',originalId:error.id,url:'/error-items/'+error.id}}]),parameters:JSON.stringify({grade:'小学五年级'})}});
+ await prisma.errorItem.update({where:{id:error.id},data:{source:'练习回流:'+set.id+':0'}});
+ await prisma.practiceRecord.create({data:{userId:user.id,learningSetId:set.id,exerciseIndex:0,userAnswer:'3',isCorrect:false}});
+ await prisma.practiceRecord.create({data:{userId:user.id,subject:'数学',isCorrect:true}});
+ await prisma.weeklyReport.create({data:{userId:user.id,notebookId:subject.id,notebookKey:subject.id,weekKey:'2026-10-05',periodStart:new Date(),periodEnd:new Date(),statistics:'{}',exerciseSetId:set.id,status:'ready'}});
+ const examImage='/knowledge-assets/'+'a'.repeat(64)+'.png';fs.mkdirSync('public/knowledge-assets',{recursive:true});fs.writeFileSync('public'+examImage,image);
+ const paper=await prisma.knowledgePaper.create({data:{sourceUrl:'https://example.test/backup-paper',sourceName:'test',title:'test',year:2026,examType:'zhongkao',subject:'数学',region:'test',examGrade:9,questions:JSON.stringify([{number:'整卷',wholePaper:true,questionHtml:'<img src="'+examImage+'"/>',answerHtml:'答案',grade:null,knowledgePoints:[]}]),questionCount:0,answerCount:0,qualityNote:''}});
+ await prisma.paperAttempt.create({data:{userId:user.id,paperId:paper.id,answers:'{}',durationSeconds:123,completed:true}});
+ const backup=await createBackup(user.id);validateBackup(backup);assert.equal(backup.data.assets.length,2);
+ const corrupt=JSON.parse(JSON.stringify(backup));corrupt.data.sets[0].title='tampered';assert.throws(()=>validateBackup(corrupt),/校验失败/);
+ await restoreBackup(backup,user.id,true);
+ await restoreBackup(backup,user.id);await restoreBackup(backup,user.id);
+ assert.equal(await prisma.practiceRecord.count({where:{userId:user.id}}),2);
+ assert.equal(await prisma.paperAttempt.count({where:{userId:user.id}}),1);
+ assert.equal(await prisma.reviewSchedule.count({where:{errorItem:{userId:user.id}}}),1);
+ await prisma.paperAttempt.deleteMany({where:{userId:user.id}});await prisma.user.delete({where:{id:user.id}});
+ const migrated=await prisma.user.create({data:{email:'backup-test@localhost',password:'new-test-only'}});
+ await restoreBackup(backup,migrated.id);await restoreBackup(backup,migrated.id);
+ const restored=await prisma.user.findUniqueOrThrow({where:{id:migrated.id}});assert.equal(restored.currentGrade,5);assert.equal(restored.examDate,'2031-06-15');
+ assert.equal(await prisma.practiceRecord.count({where:{userId:migrated.id}}),2);assert.equal(await prisma.paperAttempt.count({where:{userId:migrated.id}}),1);
+ const restoredSet=await prisma.learningSet.findFirstOrThrow({where:{userId:migrated.id}});assert.equal(restoredSet.favorited,true);assert.equal(restoredSet.favoriteIndices,'[0]');
+ const restoredError=await prisma.errorItem.findFirstOrThrow({where:{userId:migrated.id}});assert.deepEqual(fs.readFileSync('public'+restoredError.originalImageUrl),image);assert.equal(restoredError.source,'练习回流:'+restoredSet.id+':0');
+ assert.equal(await prisma.weeklyReport.count({where:{userId:migrated.id}}),1);assert.equal(await prisma.errorItem.count({where:{userId:migrated.id}}),1);const attempt=await prisma.paperAttempt.findFirstOrThrow({where:{userId:migrated.id}});const restoredPaper=await prisma.knowledgePaper.findUniqueOrThrow({where:{id:attempt.paperId}});assert.match(restoredPaper.questions,/uploads\/restore-/);
+ console.log('PASS: checksum, preview, same-account idempotence, account migration, relation remapping, favorites, paper duration and profile restoration');
+})().finally(()=>prisma.$disconnect());

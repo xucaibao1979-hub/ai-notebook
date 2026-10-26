@@ -1,0 +1,2 @@
+ALTER TABLE "AIUsage" ADD COLUMN "inputTokens" INTEGER;
+ALTER TABLE "AIUsage" ADD COLUMN "outputTokens" INTEGER;

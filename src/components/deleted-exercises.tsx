@@ -1,0 +1,5 @@
+"use client";
+import {useState} from 'react';
+import {LearningSetResponse} from '@/lib/learning';
+import {apiClient,friendlyApiError} from '@/lib/api-client';
+export function DeletedExercises({set,onChange}:{set:LearningSetResponse;onChange:(set:LearningSetResponse)=>void}){const [error,setError]=useState('');const [busy,setBusy]=useState(false);const items=set.questions.map((q,index)=>({...q,index})).filter(q=>q.deleted);async function restore(index:number){setBusy(true);try{await apiClient.patch('/api/learning/sets/'+set.id,{exerciseIndex:index,deleted:false});onChange({...set,questions:set.questions.map((q,i)=>i===index?{...q,deleted:false}:q)});}catch(e){setError(friendlyApiError(e));}finally{setBusy(false);}}if(!items.length)return null;return <details className="rounded-xl border p-4 text-sm"><summary className="cursor-pointer">已删除题目（{items.length}），点击恢复</summary>{items.map(q=><div key={q.index} className="mt-3 flex gap-3"><p className="flex-1 truncate">第 {q.index+1} 题 · {q.questionText}</p><button disabled={busy} className="text-indigo-600" onClick={()=>restore(q.index)}>恢复</button></div>)}{error&&<p role="alert">{error}</p>}</details>;}

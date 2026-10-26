@@ -1,0 +1,13 @@
+import {it,expect,vi,beforeEach} from 'vitest';
+const m=vi.hoisted(()=>({find:vi.fn(),user:vi.fn(),update:vi.fn(),solve:vi.fn()}));
+vi.mock('@/lib/prisma',()=>({prisma:{errorItem:{findFirst:m.find,updateMany:m.update},user:{findUniqueOrThrow:m.user}}}));
+vi.mock('@/lib/ai',()=>({getAIService:()=>({reanswerQuestion:m.solve})}));
+import {prepareErrorSolution} from '@/lib/error-solution';
+const item={id:'error',questionText:'1+1=?',answerText:'3',analysis:'旧解析',originalImageUrl:'',subject:{name:'数学'},solutionReviewedAt:null};
+beforeEach(()=>{m.find.mockResolvedValue(item);m.user.mockResolvedValue({currentGrade:5,studyPreferences:'{}'});m.update.mockResolvedValue({count:1});m.solve.mockResolvedValue({answerText:'2',analysis:'将两个1相加'});});
+it('solves independently and stores the corrected answer before it can be used for variants',async()=>{const answer=await prepareErrorSolution('kid','error');expect(answer.answerText).toBe('2');expect(m.find.mock.calls[0][0].where).toEqual({id:'error',userId:'kid',archivedAt:null});expect(m.update.mock.calls[0][0].data.answerText).toBe('2');expect(m.update.mock.calls[0][0].data.solutionReviewedAt).toBeInstanceOf(Date);});
+it('does not access a foreign or removed original question',async()=>{m.find.mockResolvedValue(null);await expect(prepareErrorSolution('kid','foreign')).rejects.toThrow('不存在或已移除');expect(m.solve).not.toHaveBeenCalled();});
+it('refuses missing diagrams and incomplete solutions',async()=>{m.find.mockResolvedValue({...item,questionText:'如图求面积'});await expect(prepareErrorSolution('kid','error')).rejects.toThrow('题图');expect(m.solve).not.toHaveBeenCalled();m.find.mockResolvedValue(item);m.solve.mockResolvedValue({answerText:'',analysis:''});await expect(prepareErrorSolution('kid','error')).rejects.toThrow('未确认');expect(m.update).not.toHaveBeenCalled();});
+it('uses an already reviewed original without another paid AI call',async()=>{m.find.mockResolvedValue({...item,solutionReviewedAt:new Date(),answerText:'2'});expect((await prepareErrorSolution('kid','error')).answerText).toBe('2');expect(m.solve).not.toHaveBeenCalled();});
+it('deduplicates simultaneous requests for the same identity and original',async()=>{await Promise.all([prepareErrorSolution('kid','error'),prepareErrorSolution('kid','error')]);expect(m.solve).toHaveBeenCalledTimes(1);});
+it('does not overwrite an original changed while AI was solving it',async()=>{m.update.mockResolvedValue({count:0});await expect(prepareErrorSolution('kid','error')).rejects.toThrow('原题已变更');});

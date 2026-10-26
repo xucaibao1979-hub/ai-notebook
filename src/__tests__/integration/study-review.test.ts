@@ -1,0 +1,11 @@
+import {it,expect,vi,beforeEach} from 'vitest';
+const m=vi.hoisted(()=>({session:vi.fn(),find:vi.fn(),updateSchedules:vi.fn(),createSchedule:vi.fn(),updateError:vi.fn()}));
+vi.mock('next-auth',()=>({getServerSession:m.session}));vi.mock('@/lib/auth',()=>({authOptions:{}}));
+vi.mock('@/lib/prisma',()=>({prisma:{$transaction:(fn:(tx:unknown)=>unknown)=>fn({errorItem:{findFirst:m.find,update:m.updateError},reviewSchedule:{updateMany:m.updateSchedules,create:m.createSchedule}})}}));
+import {POST} from '@/app/api/study-plan/review/route';
+const request=(result='mastered')=>new Request('http://localhost/review',{method:'POST',body:JSON.stringify({id:'error',answer:'独立作答',result})});
+beforeEach(()=>{m.session.mockResolvedValue({user:{id:'u'}});m.find.mockResolvedValue({id:'error',userNotes:'原笔记',errorType:null,reviewSchedules:[]});});
+it('checks owner and blocks unauthorized review',async()=>{m.session.mockResolvedValue(null);expect((await POST(request())).status).toBe(401);m.session.mockResolvedValue({user:{id:'u'}});m.find.mockResolvedValue(null);expect((await POST(request())).status).toBe(400);expect(m.find.mock.calls[0][0].where).toEqual({id:'error',userId:'u'});expect(m.createSchedule).not.toHaveBeenCalled();});
+it('requires different dates before marking mastery',async()=>{expect((await POST(request())).status).toBe(200);expect(m.updateError.mock.calls[0][0].data.masteryLevel).toBe(1);expect(m.createSchedule).toHaveBeenCalledTimes(2);});
+it('does not count duplicate due schedules as independent attempts',async()=>{m.find.mockResolvedValue({id:'error',reviewSchedules:[{id:'due1',scheduledFor:new Date(Date.now()-86400000),completedAt:null,isCorrect:null},{id:'due2',scheduledFor:new Date(Date.now()-2*86400000),completedAt:null,isCorrect:null}]});expect((await POST(request('careless'))).status).toBe(200);expect(m.createSchedule).toHaveBeenCalledTimes(1);expect(m.updateError.mock.calls[0][0].data.errorType).toBe('粗心出错');});
+it('refuses a second review result on the same calendar day',async()=>{m.find.mockResolvedValue({id:'error',reviewSchedules:[{completedAt:new Date(),isCorrect:true}]});expect((await POST(request())).status).toBe(400);expect(m.updateError).not.toHaveBeenCalled();});

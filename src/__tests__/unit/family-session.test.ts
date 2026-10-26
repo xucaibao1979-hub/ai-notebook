@@ -1,0 +1,11 @@
+import {it,expect,vi,beforeEach} from 'vitest';
+const m=vi.hoisted(()=>({find:vi.fn(),owned:vi.fn()}));
+vi.mock('@/lib/prisma',()=>({prisma:{user:{findUnique:m.find}}}));
+vi.mock('@/lib/family',()=>({ownedLearner:m.owned}));
+import {authOptions} from '@/lib/auth';
+const jwt=authOptions.callbacks!.jwt!;
+const session=authOptions.callbacks!.session!;
+beforeEach(()=>{m.find.mockResolvedValue({id:'parent',email:'parent@localhost',name:'家长',role:'admin',isActive:true});m.owned.mockResolvedValue(null);});
+it('ignores forged identity switches outside the authenticated parent household',async()=>{const token=await jwt({token:{id:'parent',sub:'parent'},trigger:'update',session:{learnerId:'foreign',accountId:'other'}} as Parameters<typeof jwt>[0]);expect(token.learnerId).toBeUndefined();expect(m.owned).toHaveBeenCalledWith('parent','foreign');});
+it('switches data ownership while keeping the authenticated account identity fixed',async()=>{m.owned.mockResolvedValue({id:'kid',email:'learner-test@localhost',name:'孩子',role:'user',isActive:true});const token=await jwt({token:{id:'parent',sub:'parent'},trigger:'update',session:{learnerId:'kid'}} as Parameters<typeof jwt>[0]);expect(token.id).toBe('parent');expect(token.learnerId).toBe('kid');const result=await session({session:{user:{id:'parent'},expires:'2030-01-01'},token} as Parameters<typeof session>[0]);expect(result.user).toMatchObject({id:'kid',accountId:'parent',role:'user'});expect(result.user).not.toHaveProperty('password');});
+it('falls back safely if a selected child has been disabled or removed',async()=>{const result=await session({session:{user:{id:'parent'},expires:'2030-01-01'},token:{id:'parent',learnerId:'missing'}} as Parameters<typeof session>[0]);expect(result.user).toMatchObject({id:'parent'});});

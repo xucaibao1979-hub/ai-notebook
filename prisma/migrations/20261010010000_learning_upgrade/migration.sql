@@ -1,0 +1,5 @@
+ALTER TABLE "User" ADD COLUMN "studyPreferences" TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE "LearningSet" ADD COLUMN "archivedAt" DATETIME;
+ALTER TABLE "PaperAttempt" ADD COLUMN "durationSeconds" INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE "AIUsage" ("id" TEXT NOT NULL PRIMARY KEY,"userId" TEXT,"task" TEXT NOT NULL,"model" TEXT NOT NULL,"durationMs" INTEGER NOT NULL,"success" BOOLEAN NOT NULL,"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE INDEX "AIUsage_userId_createdAt_idx" ON "AIUsage"("userId","createdAt");

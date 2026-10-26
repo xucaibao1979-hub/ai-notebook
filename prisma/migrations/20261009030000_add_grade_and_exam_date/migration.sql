@@ -1,0 +1,2 @@
+ALTER TABLE "User" ADD COLUMN "currentGrade" INTEGER;
+ALTER TABLE "User" ADD COLUMN "examDate" TEXT;
