@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
+import { parseAIJson } from './ai/schema';
 import { StudyCourse, StudyUnit } from './study-preferences';
 import { courseIdentity } from './study-catalog';
 
@@ -9,11 +10,7 @@ export const catalogDraftSchema = z.object({ units: z.array(z.object({ title: z.
 export type CatalogDraft = z.infer<typeof catalogDraftSchema>;
 
 export function parseCatalogDraft(answer: string): CatalogDraft {
-    const cleaned = answer.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const start = cleaned.indexOf('{');
-    const end = cleaned.lastIndexOf('}');
-    if (start < 0 || end <= start) throw new Error('模型未返回可用的目录 JSON');
-    const parsed = catalogDraftSchema.parse(JSON.parse(cleaned.slice(start, end + 1)));
+    const parsed = parseAIJson(answer, catalogDraftSchema);
     return { units: parsed.units.map(unit => ({ ...unit, lessons: [...new Map(unit.lessons.map(lesson => [lesson.title, lesson])).values()], entries: [...new Map(unit.entries.map(entry => [entry.term, entry])).values()] })) };
 }
 

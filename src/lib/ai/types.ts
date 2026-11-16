@@ -24,6 +24,7 @@ export interface GeogebraAnalysisResult {
 }
 
 export interface AIService {
+    translateImage(imageBase64: string, mimeType: string, instructions: string): Promise<string>;
     generateCatalogDraft?(instructions: string): Promise<string>;
     reviewExercise?(instructions: string): Promise<string>;
     extractTextbookCatalogPage(imageBase64: string, mimeType: string, instructions: string): Promise<string>;

@@ -16,18 +16,17 @@ describe('grade catalog suggestion', () => {
         const unit = { title: 'Unit 1', lessons: [{ title: 'Clubs', page: '' }], entries: [{ kind: '单词', term: 'club', meaning: '社团' }] };
         mocks.reanswer.mockResolvedValue({ answerText: JSON.stringify({ units: [unit] }) });
     });
-    it('creates a reviewable draft for a requested volume', async () => {
+    it('requires a verified catalog for the requested volume', async () => {
         const response = await POST(new Request('http://localhost/api/study-catalog/suggest-grade', { method: 'POST', body: JSON.stringify({ region: '北京', publisher: '甲出版社', subject: '英语', grade: '小学五年级', volume: '上册' }) }));
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(422);
         const body = await response.json();
-        expect(body.volume).toBe('上册');
-        expect(body.units[0].entries[0].term).toBe('club');
-        expect(mocks.reanswer.mock.calls[0][0]).toContain('北京');
+        expect(body.message).toContain('未找到可核对的上册原版目录');
+        expect(mocks.reanswer).not.toHaveBeenCalled();
     });
     it('rejects a placeholder unit instead of presenting it as a real catalog', async () => {
         mocks.reanswer.mockResolvedValue({ answerText: JSON.stringify({ units: [{ title: '待核对单元（原版目录未确认）', lessons: [{ title: '请对照教材', page: '' }], entries: [] }] }) });
         const response = await POST(new Request('http://localhost/api/study-catalog/suggest-grade', { method: 'POST', body: JSON.stringify({ region: '北京', publisher: '甲出版社', subject: '英语', grade: '小学五年级', volume: '上册' }) }));
         expect(response.status).toBe(422);
-        expect((await response.json()).message).toContain('可重试自动匹配');
+        expect((await response.json()).message).toContain('请上传本册目录页或手动录入');
     });
 });

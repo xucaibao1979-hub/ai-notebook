@@ -73,7 +73,20 @@ export async function GET() {
             });
         }
 
-        return NextResponse.json(notebooks);
+        const progressRows = await prisma.errorItem.groupBy({
+            by: ['subjectId', 'masteryLevel'],
+            where: { userId: user.id, archivedAt: null, subjectId: { in: notebooks.map(notebook => notebook.id) } },
+            _count: { _all: true },
+        });
+        const progress = new Map<string, { pending: number; mastered: number }>();
+        for (const row of progressRows) {
+            if (!row.subjectId) continue;
+            const counts = progress.get(row.subjectId) || { pending: 0, mastered: 0 };
+            if (row.masteryLevel >= 2) counts.mastered += row._count._all;
+            else counts.pending += row._count._all;
+            progress.set(row.subjectId, counts);
+        }
+        return NextResponse.json(notebooks.map(notebook => ({ ...notebook, progress: progress.get(notebook.id) || { pending: 0, mastered: 0 } })));
     } catch (error) {
         logger.error({ error }, 'Error fetching notebooks');
         return internalError("Failed to fetch notebooks");

@@ -52,6 +52,7 @@ vi.mock('@/lib/ai/tag-service', () => ({
 // Delayed import to ensure mocks are applied
 import { OpenAIProvider } from '@/lib/ai/openai-provider';
 import type { ParsedQuestion } from '@/lib/ai/types';
+import { usageContext } from '@/lib/ai/usage-context';
 
 type PrivateOpenAIProvider = {
     parseResponse(text: string): ParsedQuestion;
@@ -62,6 +63,51 @@ type PrivateOpenAIProvider = {
 function asPrivateProvider(provider: OpenAIProvider): PrivateOpenAIProvider {
     return provider as unknown as PrivateOpenAIProvider;
 }
+
+describe('OpenAI SDK 调用配置与 LongCat usage', () => {
+    beforeEach(() => vi.clearAllMocks());
+
+    it('文本生成、重新解题和 GeoGebra 调用关闭 SDK 重试', async () => {
+        const provider = new OpenAIProvider({ apiKey: 'test-key' });
+        mockCompletionCreate.mockResolvedValueOnce({ choices: [{ message: { content: '<question_text>题</question_text><answer_text>答</answer_text><analysis>解</analysis>' } }] })
+            .mockResolvedValueOnce({ choices: [{ message: { content: '<answer_text>答</answer_text><analysis>解</analysis>' } }] })
+            .mockResolvedValueOnce({ choices: [{ message: { content: '{"suitable":false,"commands":[],"description":"无"}' } }] });
+        await provider.generateSimilarQuestion('题', []);
+        await provider.reanswerQuestion('题');
+        await provider.analyzeForGeogebra('题', '答', '解');
+        expect(mockCompletionCreate).toHaveBeenCalledTimes(3);
+        for (const [, options] of mockCompletionCreate.mock.calls) expect(options).toEqual({ timeout: 60000, maxRetries: 0 });
+    });
+
+    it('翻译 chat 限制输出 token 并拒绝截断', async () => {
+        const provider = new OpenAIProvider({ apiKey: 'test-key' });
+        mockCompletionCreate.mockResolvedValueOnce({ choices: [{ finish_reason: 'length', message: { content: '{"sourceText":"a","translatedText":"b"}' } }] });
+        await expect(provider.translateImage('image', 'image/png', '翻译')).rejects.toThrow('AI_RESPONSE_ERROR');
+        expect(mockCompletionCreate.mock.calls[0][0].max_tokens).toBe(1024);
+        expect(mockCompletionCreate.mock.calls[0][1]).toEqual({ timeout: 60000, maxRetries: 0 });
+    });
+
+    it('GeoGebra JSON 修复后仍拒绝非法命令类型', async () => {
+        const provider = new OpenAIProvider({ apiKey: 'test-key' });
+        mockCompletionCreate.mockResolvedValueOnce({ choices: [{ message: { content: '{"suitable":true,"commands":["A=(0,0)",],"description":"演示",}' } }] })
+            .mockResolvedValueOnce({ choices: [{ message: { content: '{"suitable":true,"commands":[123],"description":"演示",}' } }] });
+        await expect(provider.analyzeForGeogebra('题', '答', '解')).resolves.toEqual({ suitable: true, commands: ['A=(0,0)'], description: '演示' });
+        await expect(provider.analyzeForGeogebra('题', '答', '解')).rejects.toThrow('AI_UNKNOWN_ERROR');
+    });
+
+    it('LongCat 多模态仅采集上游提供的 usage，不估算缺失数据', async () => {
+        const provider = new OpenAIProvider({ apiKey: 'test-key', baseUrl: 'https://longcat.chat/v1' });
+        const state: { inputTokens?: number; outputTokens?: number } = {};
+        const xml = '<question_text>题</question_text><answer_text>答</answer_text><analysis>解</analysis>';
+        const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: xml } }], usage: { prompt_tokens: 8, completion_tokens: 3 } }) } as Response)
+            .mockResolvedValueOnce({ ok: true, json: async () => ({ choices: [{ message: { content: xml } }] }) } as Response);
+        try {
+            await usageContext.run(state, async () => { await provider.analyzeImage('data', 'image/png'); await provider.analyzeImage('data', 'image/png'); });
+            expect(state).toEqual({ inputTokens: 8, outputTokens: 3 });
+            expect(fetchMock).toHaveBeenCalledTimes(2);
+        } finally { fetchMock.mockRestore(); }
+    });
+});
 
 describe('OpenAI Provider 响应解析', () => {
     let provider: OpenAIProvider;

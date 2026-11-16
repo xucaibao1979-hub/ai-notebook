@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
         update: vi.fn(),
         delete: vi.fn(),
     },
+    mockPrismaErrorItem: { groupBy: vi.fn() },
     mockSession: {
         user: {
             email: 'user@example.com',
@@ -32,6 +33,7 @@ vi.mock('@/lib/prisma', () => ({
     prisma: {
         user: mocks.mockPrismaUser,
         subject: mocks.mockPrismaSubject,
+        errorItem: mocks.mockPrismaErrorItem,
     },
 }));
 
@@ -60,6 +62,7 @@ describe('/api/notebooks', () => {
         vi.clearAllMocks();
         mocks.mockPrismaUser.findUnique.mockResolvedValue(mockUser);
         mocks.mockPrismaUser.findFirst.mockResolvedValue(mockUser);
+        mocks.mockPrismaErrorItem.groupBy.mockResolvedValue([]);
         vi.mocked(getServerSession).mockResolvedValue(mocks.mockSession);
     });
 

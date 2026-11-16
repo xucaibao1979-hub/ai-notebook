@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseAIJson } from './ai/schema';
 
 const item = z.object({ number: z.string().trim().max(16).default(''), title: z.string().trim().min(1).max(100), page: z.string().trim().max(20).default('') });
 export const textbookPhotoPageSchema = z.object({
@@ -15,10 +16,7 @@ export const textbookPhotoPageSchema = z.object({
 export type TextbookPhotoPage = z.infer<typeof textbookPhotoPageSchema>;
 
 export function parseTextbookPhotoPage(answer: string): TextbookPhotoPage {
-    const clean = answer.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-    const start = clean.indexOf('{'), end = clean.lastIndexOf('}');
-    if (start < 0 || end <= start) throw new Error('PHOTO_CATALOG_FORMAT');
-    return textbookPhotoPageSchema.parse(JSON.parse(clean.slice(start, end + 1)));
+    return parseAIJson(answer, textbookPhotoPageSchema);
 }
 
 export function mergeTextbookPhotoPages(pages: TextbookPhotoPage[]): TextbookPhotoPage {

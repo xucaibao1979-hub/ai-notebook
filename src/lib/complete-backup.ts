@@ -11,7 +11,7 @@ const row = z.record(z.string(), z.unknown());
 const dataSchema = z.object({
     profile: z.object({ name: z.string().nullable(), educationStage: z.string().nullable(), enrollmentYear: z.number().nullable(), currentGrade: z.number().int().min(1).max(17).nullable(), examDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine(v=>{const d=new Date(v+'T00:00:00Z');return Number.isFinite(d.getTime())&&d.toISOString().slice(0,10)===v;}).nullable(), studyPreferences: z.string() }),
     subjects: z.array(row), tags: z.array(row), errors: z.array(row), schedules: z.array(row),
-    sets: z.array(row), records: z.array(row), reports: z.array(row), attempts: z.array(row), papers: z.array(row), homework:z.array(row).optional(), revisions:z.array(row).optional(),
+    sets: z.array(row), records: z.array(row), reports: z.array(row), attempts: z.array(row), papers: z.array(row), homework:z.array(row).optional(), revisions:z.array(row).optional(), evidence:z.array(row).optional(), prerequisites:z.array(row).optional(), diagnoses:z.array(row).optional(), paths:z.array(row).optional(), tasks:z.array(row).optional(), tutorNotes:z.array(row).optional(),
     assets: z.array(z.object({ url: z.string(), data: z.string(), sha256: z.string() })),
 });
 const envelope = z.object({ version: z.literal(2), kind: z.literal('learning-backup'), exportedAt: z.string(), email: z.string(), sha256: z.string(), data: dataSchema });
@@ -24,7 +24,7 @@ export function validateBackup(raw: unknown) {
         if (!/^\/(?:uploads|knowledge-assets)\/[\w./-]+$/.test(asset.url) || asset.url.includes('..')) throw new Error('备份包含非法图片路径');
         if (checksum(Buffer.from(asset.data, 'base64')) !== asset.sha256) throw new Error('图片校验失败');
     }
-    for (const name of ['subjects', 'tags', 'errors', 'schedules', 'sets', 'records', 'reports', 'attempts', 'papers', 'homework', 'revisions'] as const) {
+    for (const name of ['subjects', 'tags', 'errors', 'schedules', 'sets', 'records', 'reports', 'attempts', 'papers', 'homework', 'revisions', 'evidence', 'prerequisites', 'diagnoses', 'paths', 'tasks', 'tutorNotes'] as const) {
         const ids = new Set<string>();
         for (const item of backup.data[name]||[]) {
             if (typeof item.id !== 'string' || !item.id || ids.has(item.id)) throw new Error(`${name} 存在无效或重复 ID`);
@@ -36,6 +36,8 @@ export function validateBackup(raw: unknown) {
     for (const r of backup.data.records) if (!has('sets', r.learningSetId)) throw new Error('练习题组关联缺失');
     for (const s of backup.data.schedules) if (!has('errors', s.errorItemId)) throw new Error('复习错题关联缺失');
     for (const a of backup.data.attempts) if (!has('papers', a.paperId)) throw new Error('试卷关联缺失');
+    for (const p of backup.data.paths||[]) if (!has('diagnoses', p.diagnosisSessionId)) throw new Error('学习路径关联的诊断记录缺失');
+    for (const note of backup.data.tutorNotes||[]) if (note.evidenceId && !has('evidence', note.evidenceId)) throw new Error('讲解关联的教材依据缺失');
     for (const t of backup.data.tags) if (!has('tags', t.parentId)) throw new Error('知识点父级关联缺失');
     for (const t of backup.data.tags) {const visited=new Set();let cursor:Record<string,unknown>|undefined=t;while(cursor){if(visited.has(cursor.id))throw new Error('知识点层级存在循环');visited.add(cursor.id);cursor=backup.data.tags.find(next=>next.id===cursor?.parentId);}}
     for (const e of backup.data.errors) if(Array.isArray(e.tags)&&e.tags.some(t=>!has('tags',(t as {id:string}).id))) throw new Error('错题知识点关联缺失');
@@ -45,6 +47,9 @@ export function validateBackup(raw: unknown) {
         if(typeof revision.action!=='string'||typeof revision.snapshot!=='string') throw new Error('目录历史版本格式无效');
         studyPreferencesSchema.parse(JSON.parse(revision.snapshot));
     }
+    for (const item of backup.data.evidence||[]) if (typeof item.nodeId !== 'string' || typeof item.unitId !== 'string' || item.image && !/^data:image\/(?:jpeg|png|webp);base64,/.test(String(item.image))) throw new Error('教材证据格式无效');
+    for (const item of backup.data.diagnoses||[]) { const state=JSON.parse(String(item.state)); if (!Array.isArray(state.answers) || !Array.isArray(state.queue)) throw new Error('诊断记录格式无效'); }
+    for (const item of backup.data.paths||[]) { const state=JSON.parse(String(item.state)); if (!Array.isArray(state.steps)) throw new Error('学习路径格式无效'); }
     for (const s of backup.data.sets) {
         const questions = JSON.parse(String(s.questions));
         if (!Array.isArray(questions)) throw new Error('练习题目格式无效');
@@ -71,7 +76,13 @@ export async function createBackup(userId: string) {
         const papers = await tx.knowledgePaper.findMany({ where: { id: { in: attempts.map(a => a.paperId) } } });
         const homework=await tx.homeworkReview.findMany({where:{userId}});
         const revisions=await tx.studyCatalogRevision.findMany({where:{userId},orderBy:{createdAt:'asc'}});
-        return { email: user.email, profile: { name: user.name, educationStage: user.educationStage, enrollmentYear: user.enrollmentYear, currentGrade: user.currentGrade, examDate: user.examDate, studyPreferences: user.studyPreferences }, subjects, tags, errors, schedules, sets, records, reports, attempts, papers, homework, revisions };
+        const evidence=await tx.textbookEvidence.findMany({where:{userId}});
+        const prerequisites=await tx.knowledgePrerequisite.findMany({where:{userId}});
+        const diagnoses=await tx.diagnosisSession.findMany({where:{userId}});
+        const paths=await tx.learningPath.findMany({where:{userId}});
+        const tasks=await tx.studyTask.findMany({where:{userId}});
+        const tutorNotes=await tx.sourceTutorNote.findMany({where:{userId}});
+        return { email: user.email, profile: { name: user.name, educationStage: user.educationStage, enrollmentYear: user.enrollmentYear, currentGrade: user.currentGrade, examDate: user.examDate, studyPreferences: user.studyPreferences }, subjects, tags, errors, schedules, sets, records, reports, attempts, papers, homework, revisions, evidence, prerequisites, diagnoses, paths, tasks, tutorNotes };
     }, {timeout: 60000});
     const assets: {url:string;data:string;sha256:string}[] = [];
     const paperImages=[...data.papers,...data.sets].flatMap(p=>[...p.questions.matchAll(/\/(?:knowledge-assets\/[a-f0-9]{64}|uploads\/restore-[a-f0-9]{64})\.(?:jpg|png|webp)/g)].map(m=>m[0]));
@@ -104,7 +115,7 @@ export async function restoreBackup(raw: unknown, userId: string, dryRun = false
     if(backup.email!==current.email) throw new Error('请使用备份所属账户登录后恢复');
     const counts=Object.fromEntries(Object.entries(backup.data).filter(([,v])=>Array.isArray(v)).map(([k,v])=>[k,(v as unknown[]).length]));
     // Prevalidate every scalar before transaction, also in preview mode.
-    const models={subjects:'Subject',tags:'KnowledgeTag',errors:'ErrorItem',schedules:'ReviewSchedule',sets:'LearningSet',records:'PracticeRecord',reports:'WeeklyReport',attempts:'PaperAttempt',papers:'KnowledgePaper',homework:'HomeworkReview',revisions:'StudyCatalogRevision'};
+    const models={subjects:'Subject',tags:'KnowledgeTag',errors:'ErrorItem',schedules:'ReviewSchedule',sets:'LearningSet',records:'PracticeRecord',reports:'WeeklyReport',attempts:'PaperAttempt',papers:'KnowledgePaper',homework:'HomeworkReview',revisions:'StudyCatalogRevision',evidence:'TextbookEvidence',prerequisites:'KnowledgePrerequisite',diagnoses:'DiagnosisSession',paths:'LearningPath',tasks:'StudyTask',tutorNotes:'SourceTutorNote'};
     for(const [table,model] of Object.entries(models)) for(const item of backup.data[table as keyof typeof models]||[]) scalarData(model,item);
     if(dryRun)return counts;
     const {sanitizeHtml}=await import('../../scripts/library-parser.cjs');
@@ -130,6 +141,12 @@ export async function restoreBackup(raw: unknown, userId: string, dryRun = false
         for(const item of backup.data.schedules){const own=await tx.reviewSchedule.findFirst({where:{id:String(item.id),errorItem:{userId}}});const id=own?.id||restoreId(item.id);const data={...scalarData('ReviewSchedule',item),errorItemId:mapped(item.errorItemId)!} as Prisma.ReviewScheduleUncheckedCreateInput;await tx.reviewSchedule.upsert({where:{id},create:{...data,id},update:data});}
         for(const item of backup.data.reports){const data={...scalarData('WeeklyReport',item),userId,notebookId:mapped(item.notebookId),notebookKey:mapped(item.notebookId)||'all',exerciseSetId:mapped(item.exerciseSetId),leaseUntil:null} as Prisma.WeeklyReportUncheckedCreateInput;await tx.weeklyReport.upsert({where:{userId_notebookKey_weekKey:{userId,notebookKey:data.notebookKey,weekKey:data.weekKey}},create:{...data,id:restoreId(item.id)},update:data});}
         for(const item of backup.data.attempts){const own=await tx.paperAttempt.findFirst({where:{id:String(item.id),userId}});const id=own?.id||restoreId(item.id);const data={...scalarData('PaperAttempt',item),userId,paperId:mapped(item.paperId)!} as Prisma.PaperAttemptUncheckedCreateInput;await tx.paperAttempt.upsert({where:{id},create:{...data,id},update:data});}
+        for(const item of backup.data.evidence||[]){const id=restoreId(item.id);const data={...scalarData('TextbookEvidence',item),userId} as Prisma.TextbookEvidenceUncheckedCreateInput;await tx.textbookEvidence.upsert({where:{id},create:{...data,id},update:data});}
+        for(const item of backup.data.prerequisites||[]){const data={...scalarData('KnowledgePrerequisite',item),userId} as Prisma.KnowledgePrerequisiteUncheckedCreateInput;await tx.knowledgePrerequisite.upsert({where:{userId_topicId_prerequisiteId:{userId,topicId:data.topicId,prerequisiteId:data.prerequisiteId}},create:{...data,id:restoreId(item.id)},update:{strength:data.strength,reason:data.reason}});}
+        for(const item of backup.data.diagnoses||[]){const id=restoreId(item.id);const data={...scalarData('DiagnosisSession',item),userId} as Prisma.DiagnosisSessionUncheckedCreateInput;await tx.diagnosisSession.upsert({where:{id},create:{...data,id},update:data});ids.set(String(item.id),id);}
+        for(const item of backup.data.paths||[]){const data={...scalarData('LearningPath',item),userId,diagnosisSessionId:mapped(item.diagnosisSessionId)!} as Prisma.LearningPathUncheckedCreateInput;await tx.learningPath.upsert({where:{userId_diagnosisSessionId:{userId,diagnosisSessionId:data.diagnosisSessionId}},create:{...data,id:restoreId(item.id)},update:{state:data.state}});}
+        for(const item of backup.data.tasks||[]){const id=restoreId(item.id);const data={...scalarData('StudyTask',item),userId,status:item.status==='running'?'pending':String(item.status)} as Prisma.StudyTaskUncheckedCreateInput;await tx.studyTask.upsert({where:{id},create:{...data,id},update:data});}
+        for(const item of backup.data.tutorNotes||[]){const id=restoreId(item.id);const data={...scalarData('SourceTutorNote',item),userId,evidenceId:item.evidenceId?restoreId(item.evidenceId):null} as Prisma.SourceTutorNoteUncheckedCreateInput;await tx.sourceTutorNote.upsert({where:{id},create:{...data,id},update:data});}
         await tx.user.update({where:{id:userId},data:backup.data.profile});
     },{timeout:120000});
     return counts;

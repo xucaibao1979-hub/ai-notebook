@@ -25,3 +25,12 @@ it('still accepts backups created before catalog history was included', () => {
     const { revisions: _revisions, ...data } = old.data;
     expect(validateBackup({ ...old, data, sha256: createHash('sha256').update(JSON.stringify(data)).digest('hex') }).data.revisions).toBeUndefined();
 });
+
+it('checks new diagnosis and learning-path records before restore', () => {
+    const old = backupWithRevision('{}');
+    const { assets, ...base } = old.data;
+    const data = { ...base, evidence: [{ id: 'e1', nodeId: 'n1', unitId: 'u1', image: null }], prerequisites: [], diagnoses: [{ id: 'd1', state: JSON.stringify({ answers: [], queue: [] }), targetIds: '["n1"]' }], paths: [{ id: 'p1', diagnosisSessionId: 'd1', state: JSON.stringify({ steps: [], current: 0 }) }], assets };
+    expect(validateBackup({ ...old, data, sha256: createHash('sha256').update(JSON.stringify(data)).digest('hex') }).data.paths).toHaveLength(1);
+    const invalid = { ...data, paths: [{ ...data.paths[0], diagnosisSessionId: 'missing' }] };
+    expect(() => validateBackup({ ...old, data: invalid, sha256: createHash('sha256').update(JSON.stringify(invalid)).digest('hex') })).toThrow('关联');
+});

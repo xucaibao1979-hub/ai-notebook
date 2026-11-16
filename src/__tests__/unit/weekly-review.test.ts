@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/error-solution',()=>({prepareErrorSolution:vi.fn(async()=>({answerText:'正确答案',analysis:'先确认条件，再逐步求解'}))}));
+vi.mock('@/lib/exercise-validation', () => ({ validateExercise: vi.fn(async () => ({ valid: true, reason: '审核通过' })) }));
 import { calculateWeakPoints, weeklyWindow, WeeklyItem } from '@/lib/weekly-analysis';
 
 const mocks = vi.hoisted(() => ({

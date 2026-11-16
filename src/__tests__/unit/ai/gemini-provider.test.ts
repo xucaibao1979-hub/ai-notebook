@@ -72,6 +72,12 @@ describe('Gemini Provider 响应解析', () => {
         });
     });
 
+    it('翻译限制输出 token 并拒绝截断', async () => {
+        mockGenerateContent.mockResolvedValueOnce({ text: '{"sourceText":"a","translatedText":"b"}', candidates: [{ finishReason: 'MAX_TOKENS' }] });
+        await expect(provider.translateImage('image', 'image/png', '翻译')).rejects.toThrow('AI_RESPONSE_ERROR');
+        expect(mockGenerateContent.mock.calls[0][0].config).toEqual({ httpOptions: { timeout: 60000 }, maxOutputTokens: 1024 });
+    });
+
     describe('parseResponse', () => {
         it('应该正确解析包含所有必需标签的响应', () => {
             const mockResponse = `

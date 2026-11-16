@@ -26,7 +26,7 @@ describe('provider presets and Responses adapter', () => {
         const result = await provider.generateSimilarQuestion('1+1=?', ['加法']);
         expect(result.answerText).toBe('5');
         expect(mocks.chat).not.toHaveBeenCalled();
-        expect(mocks.responses).toHaveBeenCalledWith(expect.objectContaining({ model: 'gpt-5.3-codex', instructions: expect.any(String), input: expect.any(Array), store: false }));
+        expect(mocks.responses.mock.calls[0][0]).toEqual(expect.objectContaining({ model: 'gpt-5.3-codex', instructions: expect.any(String), input: expect.any(Array), store: false }));
         expect(mocks.responses.mock.calls[0][0]).not.toHaveProperty('max_tokens');
     });
     it('converts image input to Responses input_image content', async () => {
@@ -35,6 +35,14 @@ describe('provider presets and Responses adapter', () => {
         const request = mocks.responses.mock.calls[0][0];
         expect(JSON.stringify(request.input)).toContain('input_image');
         expect(JSON.stringify(request.input)).toContain('data:image/png;base64,base64-data');
+    });
+    it('翻译 Responses 专用输出上限不改变其他任务预算，并拒绝截断', async () => {
+        const provider = new OpenAIProvider({ apiKey: 'test-key', model: 'gpt-5.3-codex' });
+        mocks.responses.mockResolvedValueOnce({ status: 'incomplete', output_text: '{"sourceText":"hi","translatedText":"嗨"}' });
+        await expect(provider.translateImage('image', 'image/png', '翻译')).rejects.toThrow('AI_RESPONSE_ERROR');
+        expect(mocks.responses.mock.calls[0][0].max_output_tokens).toBe(1024);
+        await provider.generateSimilarQuestion('1+1=?', []);
+        expect(mocks.responses.mock.calls[1][0].max_output_tokens).toBe(16384);
     });
     it('keeps normal compatible providers on Chat Completions', async () => {
         const provider = new OpenAIProvider({ apiKey: 'test-key', baseUrl: 'https://vendor.example/v1', model: 'vendor-model', apiMode: 'chat' });

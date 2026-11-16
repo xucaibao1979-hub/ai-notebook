@@ -3,7 +3,7 @@ import OpenAI from "openai";
 import { AIService, ParsedQuestion, DifficultyLevel, AIConfig, ReanswerQuestionResult, GeogebraAnalysisResult } from "./types";
 import { generateAnalyzePrompt, generateSimilarQuestionPrompt, generateGeogebraPrompt } from './prompts';
 import { getAppConfig } from '../config';
-import { safeParseParsedQuestion } from './schema';
+import { safeParseParsedQuestion, parseAIJson, GeogebraAnalysisSchema } from './schema';
 import { getMathTagsFromDB, getTagsFromDB } from './tag-service';
 import { createLogger } from '../logger';
 import { normalizeMistakeStatusForSave } from '../mistake-status';
@@ -22,6 +22,21 @@ export class OpenAIProvider implements AIService {
     private apiKey: string;
     private isLongCat: boolean;
     private apiMode: 'chat' | 'responses';
+
+    async translateImage(imageBase64: string, mimeType: string, instructions: string): Promise<string> {
+        const response = await this.createCompletion({
+            model: this.model,
+            messages: [
+                { role: 'system', content: '你是图片文字识别与翻译助手。只识别图片中清晰可见的中文或英文，按原有顺序翻译，不编造模糊文字。只返回 JSON 对象，字段为 sourceText 和 translatedText，均为字符串；没有可辨认文字时两个字段均为空字符串。' },
+                { role: 'user', content: [{ type: 'text', text: instructions }, { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] },
+            ],
+            max_tokens: 1024,
+        }, { timeout: 60000, maxRetries: 0 }, true);
+        if (response.choices[0]?.finish_reason === 'length') throw new Error('AI_RESPONSE_ERROR');
+        const text = response.choices[0]?.message?.content;
+        if (!text?.trim()) throw new Error('AI_RESPONSE_ERROR');
+        return text;
+    }
 
     async extractTextbookCatalogPage(imageBase64: string, mimeType: string, instructions: string): Promise<string> {
         const response = await this.createCompletion({
@@ -95,7 +110,7 @@ export class OpenAIProvider implements AIService {
         }, 'AI Provider initialized');
     }
 
-    private async createCompletion(params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, requestOptions?:{timeout:number;maxRetries:number}): Promise<OpenAI.Chat.Completions.ChatCompletion> {
+    private async createCompletion(params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, requestOptions?:{timeout:number;maxRetries:number}, translation = false): Promise<OpenAI.Chat.Completions.ChatCompletion> {
         if (this.apiMode === 'chat'){const result=await this.openai.chat.completions.create(params,requestOptions);captureTokenUsage(result.usage?.prompt_tokens,result.usage?.completion_tokens);return result;}
         const instructions = params.messages.filter(message => message.role === 'system' || message.role === 'developer')
             .map(message => typeof message.content === 'string' ? message.content : '').join('\n');
@@ -108,7 +123,7 @@ export class OpenAIProvider implements AIService {
             }
             return { role: 'user' as const, content };
         });
-        const response = await this.openai.responses.create({ model: this.model, instructions, input, max_output_tokens: Math.max(params.max_tokens || 8192, 16384), store: false },requestOptions);
+        const response = await this.openai.responses.create({ model: this.model, instructions, input, max_output_tokens: translation ? 1024 : Math.max(params.max_tokens || 8192, 16384), store: false },requestOptions);
         captureTokenUsage(response.usage?.input_tokens,response.usage?.output_tokens);
         if (response.status === 'incomplete' || !response.output_text?.trim()) throw new Error('AI_RESPONSE_ERROR: Responses API did not return a complete answer');
         return { id: response.id, object: 'chat.completion', created: response.created_at, model: response.model, choices: [{ index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: response.output_text, refusal: null } }] };
@@ -326,6 +341,7 @@ export class OpenAIProvider implements AIService {
                 }
 
                 response = await res.json();
+                captureTokenUsage(response.usage?.prompt_tokens, response.usage?.completion_tokens);
             } else {
                 response = await this.createCompletion({
                     model: this.model,
@@ -408,7 +424,7 @@ export class OpenAIProvider implements AIService {
                 ],
                 // response_format: { type: "json_object" }, // Removing to improve compatibility with 3rd party providers
                 max_tokens: 8192,
-            });
+            }, { timeout: 60000, maxRetries: 0 });
 
             const text = response.choices[0]?.message?.content || "";
 
@@ -478,7 +494,7 @@ export class OpenAIProvider implements AIService {
                     { role: "user", content: userContent }
                 ],
                 max_tokens: 8192,
-            });
+            }, { timeout: 60000, maxRetries: 0 });
 
             logger.debug({ response: JSON.stringify(response) }, 'Full API response');
 
@@ -534,7 +550,7 @@ export class OpenAIProvider implements AIService {
                     { role: "user", content: "请分析上述题目并生成 GeoGebra 演示命令。" }
                 ],
                 max_tokens: 8192,
-            });
+            }, { timeout: 60000, maxRetries: 0 });
 
             const text = response.choices[0]?.message?.content || '';
             logger.debug({ rawResponse: text }, 'GeoGebra AI raw response');
@@ -555,13 +571,7 @@ export class OpenAIProvider implements AIService {
                 jsonStr = jsonStr.substring(objStart, objEnd + 1);
             }
 
-            const parsed = JSON.parse(jsonStr);
-
-            return {
-                suitable: Boolean(parsed.suitable),
-                commands: Array.isArray(parsed.commands) ? parsed.commands : [],
-                description: parsed.description || "",
-            };
+            return parseAIJson(jsonStr, GeogebraAnalysisSchema);
         } catch (error) {
             logger.error({ error, stack: error instanceof Error ? error.stack : undefined }, 'Error during GeoGebra analysis');
             this.handleError(error);

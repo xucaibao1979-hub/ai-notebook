@@ -46,12 +46,15 @@ function PrintPreviewContent() {
         }
     };
 
-    const handlePrint = () => {
-        window.print();
-    };
-
     const selectedItems = getSelectedPrintItems(items, selectedIds);
     const reserveAnswerSpace = shouldReserveAnswerSpace(showAnswers, showAnalysis);
+    const photoOnlyItems = selectedItems.filter((item) => !item.questionText?.trim());
+    const cannotPrintStudent = reserveAnswerSpace && photoOnlyItems.length > 0;
+
+    const handlePrint = () => {
+        if (cannotPrintStudent || selectedItems.length === 0) return;
+        window.print();
+    };
     const countLabel = getPrintPreviewCountLabel(items.length, selectedItems.length);
     const emptyState = getPrintPreviewEmptyState(items.length, selectedItems.length);
 
@@ -94,7 +97,7 @@ function PrintPreviewContent() {
                         <h1 className="text-lg sm:text-xl font-bold flex-1">
                             {t.printPreview?.title || 'Print Preview'} ({countLabel} {t.notebooks?.items || 'items'})
                         </h1>
-                        <Button onClick={handlePrint} size="sm" className="whitespace-nowrap" disabled={selectedItems.length === 0}>
+                        <Button onClick={handlePrint} size="sm" className="whitespace-nowrap" disabled={selectedItems.length === 0 || cannotPrintStudent}>
                             {t.printPreview?.printButton || 'Print / Save PDF'}
                         </Button>
                     </div>
@@ -155,6 +158,13 @@ function PrintPreviewContent() {
                         </div>
                     </div>
 
+                    {cannotPrintStudent && (
+                        <div role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+                            当前选题中有 {photoOnlyItems.length} 道题没有文字题干。原照片可能包含已有作答，已暂停学生卷打印。请补充文字题干或取消选择这些题目；答案版仍可按当前设置打印。
+                            <div>涉及题目：{photoOnlyItems.map((item) => items.indexOf(item) + 1).join('、')}</div>
+                        </div>
+                    )}
+
                     {/* Item Selection Row */}
                     <div className="rounded-md border bg-muted/20 p-3 space-y-2">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -195,8 +205,11 @@ function PrintPreviewContent() {
                 </div>
             </div>
 
+            {cannotPrintStudent && (
+                <p className="hidden p-8 text-center print:block">当前选题包含没有文字题干的题目，无法安全生成学生卷。请返回预览页补充题干或取消选择后重试。</p>
+            )}
             {/* Print Content */}
-            <div className="max-w-4xl mx-auto p-8 print:p-0">
+            <div className={`max-w-4xl mx-auto p-8 print:p-0 ${cannotPrintStudent ? 'print:hidden' : ''}`}>
                 {selectedItems.map((item, index) => {
                     // 优先使用 tags 关联，回退到 knowledgePoints
                     let tags: string[] = [];
@@ -252,11 +265,13 @@ function PrintPreviewContent() {
                                 )}
                             </div>
 
-                            {/* Original Image or Text */}
-                            {showQuestionText && item.questionText ? (
-                                <div className="mb-4">
-                                    <MarkdownRenderer content={item.questionText} />
-                                </div>
+                            {/* Student copies use only the independent text; answer/analysis copies retain the image option. */}
+                            {reserveAnswerSpace || (showQuestionText && item.questionText?.trim()) ? (
+                                item.questionText?.trim() && (
+                                    <div className="mb-4">
+                                        <MarkdownRenderer content={item.questionText} />
+                                    </div>
+                                )
                             ) : (
                                 item.originalImageUrl && (
                                     <div className="mb-4">

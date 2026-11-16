@@ -18,15 +18,12 @@ describe('study catalog suggestion', () => {
         mocks.findUser.mockResolvedValue({ studyPreferences: JSON.stringify({ studyCourses: [course] }) });
         mocks.reanswer.mockResolvedValue({ answerText: '{"units":[{"title":"第一单元","lessons":[{"title":"桂花雨","page":""}]}]}', analysis: '待核对' });
     });
-    it('returns a reviewable draft using the selected textbook metadata without saving it', async () => {
+    it('refuses to invent a catalog when the exact edition has no verified source', async () => {
         const response = await POST(request());
-        expect(response.status).toBe(200);
+        expect(response.status).toBe(422);
         const body = await response.json();
-        expect(body.verification).toBe('ai-draft');
-        expect(body.course).toMatchObject({ publisher: course.publisher, subject: course.subject, grade: course.grade, volume: course.volume, textbook: course.textbook });
-        expect(body.units[0].lessons[0].title).toBe('桂花雨');
-        expect(mocks.reanswer.mock.calls[0][0]).toContain('人民教育出版社');
-        expect(mocks.reanswer.mock.calls[0][0]).toContain('小学五年级');
+        expect(body.message).toContain('没有可核对的本册原版目录');
+        expect(mocks.reanswer).not.toHaveBeenCalled();
         expect(mocks.updateUser).not.toHaveBeenCalled();
     });
     it('rejects another user without invoking AI', async () => {

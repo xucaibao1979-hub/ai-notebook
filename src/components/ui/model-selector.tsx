@@ -12,7 +12,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { RefreshCw, Loader2 } from "lucide-react";
-import { apiClient } from "@/lib/api-client";
+import { apiClient, ApiError } from "@/lib/api-client";
 import { AIModel, ModelsResponse } from "@/types/api";
 import { useLanguage } from "@/contexts/LanguageContext";
 
@@ -47,13 +47,11 @@ export function ModelSelector({ provider, apiKey, baseUrl, currentModel, onModel
         setError(null);
 
         try {
-            const params = new URLSearchParams({
+            const data = await apiClient.post<ModelsResponse>('/api/ai/models', {
                 provider,
                 apiKey,
                 ...(baseUrl && { baseUrl }),
             });
-
-            const data = await apiClient.get<ModelsResponse>(`/api/ai/models?${params}`);
 
             // Check if there's an error message in the response
             if ('error' in data && typeof data.error === 'string') {
@@ -71,7 +69,9 @@ export function ModelSelector({ provider, apiKey, baseUrl, currentModel, onModel
             }
         } catch (err: any) {
             console.error("Failed to fetch models:", err);
-            const errorMsg = err?.message || (t.modelSelector?.fetchFailed || "Failed to fetch models");
+            const errorMsg = err instanceof ApiError && err.status === 403
+                ? "该地址不支持自动获取模型，请手动输入模型名称"
+                : (t.modelSelector?.fetchFailed || "Failed to fetch models");
             setError(errorMsg + (t.modelSelector?.enterManually || ", please enter manually"));
             setUseCustom(true);
         } finally {

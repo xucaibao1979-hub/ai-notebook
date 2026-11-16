@@ -9,6 +9,7 @@ export const learningRequestSchema = z.object({
     unitId: z.string().max(100).optional(),
     unitIds: z.array(z.string().max(100)).max(30).optional(),
     paperId: z.string().max(100).optional(),
+    evidenceId: z.string().max(100).optional(),
     paperSets: z.number().int().min(1).max(2).optional(),
     unitMode: z.enum(['practice', 'review']).optional(),
     subject: z.string().trim().min(1).max(50).optional(),
@@ -21,7 +22,6 @@ export const learningRequestSchema = z.object({
     difficulty: z.enum(['easy', 'medium', 'hard', 'harder']).default('medium'),
     count: z.number().int().min(1).max(12).default(3),
 }).superRefine((value, ctx) => {
-    if (value.mode === 'daily' && value.count > 5) ctx.addIssue({ code: 'custom', message: '每日推荐最多生成 5 题', path: ['count'] });
     if (value.mode === 'ai' && (value.source !== 'ai' && value.source !== 'history' || value.source === 'ai' && !value.subject || value.source === 'history' && !value.historySetId)) {
         ctx.addIssue({ code: 'custom', message: '请选择 AI 练习的科目', path: ['subject'] });
     }
@@ -51,7 +51,7 @@ export interface LearningExercise {
     options?: string[];
     correctOption?: string;
     difficulty: string;
-    provenance: { curriculum?:string; name: string; url?: string; license?: string; licenseUrl?: string; originalId?: string; grade?: string };
+    provenance: { curriculum?:string; name: string; url?: string; license?: string; licenseUrl?: string; originalId?: string; grade?: string; topicId?: string; evidenceId?: string; page?: string; textbook?: string; edition?: string; isbn?: string; chapter?: string; publisher?: string };
     record?: { userAnswer: string; isCorrect: boolean | null };
 }
 

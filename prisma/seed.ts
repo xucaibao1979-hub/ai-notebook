@@ -5,30 +5,28 @@ const prisma = new PrismaClient();
 
 async function main() {
     const email = 'admin@localhost';
-    const password = 'admin';
     const name = 'Admin';
 
-    console.log(`Checking admin user: ${email}...`);
-
-    const existingUser = await prisma.user.findFirst({
-        where: { OR: [{ role: 'admin' }, { email }] },
+    const existingAdmin = await prisma.user.findFirst({
+        where: { role: 'admin' },
         orderBy: { createdAt: 'asc' },
     });
 
-    if (existingUser) {
-        console.log(`Admin user already exists. Updating defaults...`);
-        await prisma.user.update({
-            where: { id: existingUser.id },
-            data: {
-                ...(existingUser.username ? {} : { username: 'admin' }),
-                educationStage: 'junior_high',
-                enrollmentYear: 2025,
-            }
-        });
+    if (existingAdmin) {
+        console.log('Existing admin user found; no changes made.');
         return;
     }
 
-    console.log(`Admin user not found. Creating...`);
+    const password = process.env.ADMIN_INITIAL_PASSWORD;
+    if (!password || password.length < 12 || password.trim() !== password || /^admin$/i.test(password)) {
+        throw new Error('首次创建管理员需要设置至少 12 位的 ADMIN_INITIAL_PASSWORD（不可使用默认密码）。');
+    }
+
+    const occupiedEmail = await prisma.user.findFirst({ where: { email } });
+    if (occupiedEmail) {
+        throw new Error('admin@localhost 已被普通用户占用；不会自动提权，请手动处理后再初始化管理员。');
+    }
+
     const hashedPassword = await hash(password, 12);
 
     const user = await prisma.user.create({
@@ -46,7 +44,6 @@ async function main() {
 
     console.log(`\nSuccess! Admin user created.`);
     console.log(`Email: ${user.email}`);
-    console.log(`Password: ${password}`);
 }
 
 main()

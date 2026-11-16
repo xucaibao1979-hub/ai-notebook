@@ -37,6 +37,98 @@ model User {
   customTags KnowledgeTag[] // User's custom tags
   learningSets LearningSet[]
   weeklyReports WeeklyReport[]
+  knowledgePrerequisites KnowledgePrerequisite[]
+  diagnosisSessions DiagnosisSession[]
+  textbookEvidence TextbookEvidence[]
+  learningPaths LearningPath[]
+  sourceTutorNotes SourceTutorNote[]
+  toolPracticeSessions ToolPracticeSession[]
+}
+
+model ToolPracticeSession {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind String
+  revision Int @default(1)
+  settings String
+  questions String
+  answers String @default("{}")
+  submitted Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, kind])
+}
+
+model KnowledgePrerequisite {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject String
+  topicId String
+  prerequisiteId String
+  strength String @default("hard")
+  reason String @default("")
+  createdAt DateTime @default(now())
+
+  @@unique([userId, topicId, prerequisiteId])
+  @@index([userId, subject])
+}
+
+model DiagnosisSession {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject String
+  mode String @default("target")
+  targetIds String
+  state String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, createdAt])
+}
+
+model TextbookEvidence {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nodeId String
+  unitId String
+  page String @default("")
+  excerpt String @default("")
+  image String? // user-provided photo, private and served through an authenticated route
+  sourceSnapshot String @default("{}")
+  verified Boolean @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@index([userId, nodeId])
+}
+
+model SourceTutorNote {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  nodeId String
+  evidenceId String?
+  action String
+  text String
+  sourceSnapshot String @default("{}")
+  createdAt DateTime @default(now())
+  @@index([userId, nodeId, createdAt])
+}
+
+model LearningPath {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  diagnosisSessionId String
+  state String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  @@unique([userId, diagnosisSessionId])
+  @@index([userId, updatedAt])
 }
 
 // 统一知识点标签表 (支持无限层级)
@@ -306,6 +398,8 @@ model StudyTask {
  input String
  result String?
  error String?
+ phase String @default("等待开始")
+ progress Int @default(0)
  createdAt DateTime @default(now())
  updatedAt DateTime @updatedAt
  @@index([userId, createdAt])

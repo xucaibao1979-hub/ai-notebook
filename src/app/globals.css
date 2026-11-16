@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+@page practice-sheet { size: A4 portrait; margin: 14mm; }
+@media print {
+  .practice-print-sheet { page: practice-sheet; }
+  .practice-print-page { display: flex; flex-direction: column; box-sizing: border-box; min-height: 269mm; break-after: page; color: #111827; background: white; }
+  .practice-print-page:last-child { break-after: auto; }
+  .practice-interactive { display: none !important; }
+}
+
 .library-question-content { line-height: 1.85; color: #334155; overflow-wrap: anywhere; }
 .library-question-content p { margin: 0.55rem 0; }
 .library-question-content img { max-width: 100%; height: auto; margin: 1rem 0; }

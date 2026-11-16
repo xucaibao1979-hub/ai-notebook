@@ -43,6 +43,10 @@ export interface Notebook {
     _count?: {
         errorItems: number;
     };
+    progress?: {
+        pending: number;
+        mastered: number;
+    };
 }
 
 export interface ErrorItem {

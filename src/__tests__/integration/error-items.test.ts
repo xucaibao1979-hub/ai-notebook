@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
         findFirst: vi.fn(), // 用于去重检查
         findMany: vi.fn(),
         update: vi.fn(),
+        updateMany: vi.fn(),
         delete: vi.fn(),
         count: vi.fn(),
     },
@@ -583,15 +584,7 @@ describe('/api/error-items', () => {
 
     describe('PATCH /api/error-items/[id]/notes (更新笔记)', () => {
         it('应该成功更新用户笔记', async () => {
-            const existingItem = {
-                id: 'error-item-1',
-                userId: 'user-123',
-                userNotes: '',
-            };
-            mocks.mockPrismaErrorItem.update.mockResolvedValue({
-                ...existingItem,
-                userNotes: '这道题需要注意移项变号',
-            });
+            mocks.mockPrismaErrorItem.updateMany.mockResolvedValue({ count: 1 });
 
             const request = new Request('http://localhost/api/error-items/error-item-1/notes', {
                 method: 'PATCH',
@@ -603,19 +596,15 @@ describe('/api/error-items', () => {
             const data = await response.json();
 
             expect(response.status).toBe(200);
-            expect(data.userNotes).toBe('这道题需要注意移项变号');
+            expect(data).toEqual({ id: 'error-item-1', userNotes: '这道题需要注意移项变号' });
+            expect(mocks.mockPrismaErrorItem.updateMany).toHaveBeenCalledWith({
+                where: { id: 'error-item-1', userId: 'user-123' },
+                data: { userNotes: '这道题需要注意移项变号' },
+            });
         });
 
         it('应该成功清空笔记', async () => {
-            const existingItem = {
-                id: 'error-item-1',
-                userId: 'user-123',
-                userNotes: '旧笔记内容',
-            };
-            mocks.mockPrismaErrorItem.update.mockResolvedValue({
-                ...existingItem,
-                userNotes: '',
-            });
+            mocks.mockPrismaErrorItem.updateMany.mockResolvedValue({ count: 1 });
 
             const request = new Request('http://localhost/api/error-items/error-item-1/notes', {
                 method: 'PATCH',
@@ -627,16 +616,16 @@ describe('/api/error-items', () => {
             const data = await response.json();
 
             expect(response.status).toBe(200);
-            expect(data.userNotes).toBe('');
+            expect(data).toEqual({ id: 'error-item-1', userNotes: '' });
+            expect(mocks.mockPrismaErrorItem.updateMany).toHaveBeenCalledWith({
+                where: { id: 'error-item-1', userId: 'user-123' },
+                data: { userNotes: '' },
+            });
         });
 
         it('应该成功保存长笔记', async () => {
             const longNote = '这是一段很长的笔记内容。'.repeat(100);
-            mocks.mockPrismaErrorItem.update.mockResolvedValue({
-                id: 'error-item-1',
-                userId: 'user-123',
-                userNotes: longNote,
-            });
+            mocks.mockPrismaErrorItem.updateMany.mockResolvedValue({ count: 1 });
 
             const request = new Request('http://localhost/api/error-items/error-item-1/notes', {
                 method: 'PATCH',
@@ -647,11 +636,15 @@ describe('/api/error-items', () => {
             const response = await PATCH_NOTES(request, { params: Promise.resolve({ id: 'error-item-1' }) });
 
             expect(response.status).toBe(200);
+            expect(await response.json()).toEqual({ id: 'error-item-1', userNotes: longNote });
+            expect(mocks.mockPrismaErrorItem.updateMany).toHaveBeenCalledWith({
+                where: { id: 'error-item-1', userId: 'user-123' },
+                data: { userNotes: longNote },
+            });
         });
 
         it('应该拒绝未登录用户', async () => {
-            mocks.mockPrismaUser.findUnique.mockResolvedValue(null);
-            mocks.mockPrismaUser.findFirst.mockResolvedValue(null);
+            vi.mocked(getServerSession).mockResolvedValue(null);
 
             const request = new Request('http://localhost/api/error-items/error-item-1/notes', {
                 method: 'PATCH',
@@ -663,11 +656,34 @@ describe('/api/error-items', () => {
             const data = await response.json();
 
             expect(response.status).toBe(401);
-            expect(data.message).toBeDefined();
+            expect(data.message).toBe('Authentication required');
+            expect(mocks.mockPrismaErrorItem.updateMany).not.toHaveBeenCalled();
+        });
+
+        it('应该拒绝修改其他用户的笔记', async () => {
+            mocks.mockPrismaErrorItem.updateMany.mockImplementation(async ({ where }: { where: { id: string; userId: string } }) => ({
+                count: where.id === 'other-user-item' && where.userId === 'other-user-id' ? 1 : 0,
+            }));
+
+            const request = new Request('http://localhost/api/error-items/other-user-item/notes', {
+                method: 'PATCH',
+                body: JSON.stringify({ userNotes: '越权修改' }),
+                headers: { 'Content-Type': 'application/json' },
+            });
+
+            const response = await PATCH_NOTES(request, { params: Promise.resolve({ id: 'other-user-item' }) });
+
+            expect(response.status).toBe(404);
+            expect(await response.json()).toEqual({ error: 'Error item not found' });
+            expect(mocks.mockPrismaErrorItem.updateMany).toHaveBeenCalledWith({
+                where: { id: 'other-user-item', userId: 'user-123' },
+                data: { userNotes: '越权修改' },
+            });
+            expect(mocks.mockPrismaErrorItem.update).not.toHaveBeenCalled();
         });
 
         it('应该处理数据库错误', async () => {
-            mocks.mockPrismaErrorItem.update.mockRejectedValue(new Error('Database error'));
+            mocks.mockPrismaErrorItem.updateMany.mockRejectedValue(new Error('Database error'));
 
             const request = new Request('http://localhost/api/error-items/error-item-1/notes', {
                 method: 'PATCH',

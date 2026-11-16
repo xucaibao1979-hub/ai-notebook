@@ -10,6 +10,11 @@ describe('AI catalog draft', () => {
         const draft = parseCatalogDraft('```json\n{"units":[{"title":"第一单元","lessons":[{"title":"桂花雨","page":""},{"title":"桂花雨","page":""}]}]}\n```');
         expect(draft.units[0].lessons).toEqual([{ title: '桂花雨', page: '' }]);
     });
+    it('仅修复 JSON 语法错误，仍拒绝不符合 schema 的内容及 XML', () => {
+        expect(parseCatalogDraft('{"units":[{"title":"第一单元","lessons":[{"title":"课文",}],}],}').units[0].lessons[0].title).toBe('课文');
+        expect(() => parseCatalogDraft('{"units":[{"title":"第一单元","lessons":[],}]}')).toThrow();
+        expect(() => parseCatalogDraft('<units><title>第一单元</title></units>')).toThrow();
+    });
     it('adds missing lessons while preserving manual lessons and mastered knowledge points', () => {
         const existing: StudyUnit[] = [{ ...course, id: 'unit-1', title: '第一单元', lessons: [{ title: '桂花雨', page: '1' }], entries: [{ kind: '知识点', term: '借物抒情', meaning: '借物表达感情', mastered: true }] }];
         const result = mergeCatalogDraft(course, existing, { units: [{ title: '第一单元', lessons: [{ title: '桂花雨', page: '' }, { title: '落花生', page: '' }], entries: [{ kind: '知识点', term: '修辞方法', meaning: '识别比喻', }] }, { title: '第二单元', lessons: [{ title: '新课目', page: '' }], entries: [] }] });

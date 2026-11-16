@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { mergeTextbookPhotoPages, parseTextbookPhotoPage } from '@/lib/textbook-photo';
 
 describe('textbook photo recognition data', () => {
+    it('修复照片识别 JSON 语法后仍校验字段', () => {
+        expect(parseTextbookPhotoPage('{"items":[{"title":"第一单元",}],}').items[0].title).toBe('第一单元');
+        expect(() => parseTextbookPhotoPage('{"items":[{"title":"",}],}')).toThrow();
+    });
     it('combines copyright metadata and two directory pages without duplicated overlap', () => {
         const copyright = parseTextbookPhotoPage(JSON.stringify({ publisher: '上海教育出版社', subject: '数学', grade: '五年级', volume: '上册', schoolSystem: '五四学制', edition: '2026年7月第1版', isbn: '978-7-5720-4337-6', items: [] }));
         const first = parseTextbookPhotoPage(JSON.stringify({ items: [{ number: '1', title: '小数的乘法与除法', page: '1' }, { number: '2', title: '小数的应用', page: '23' }] }));

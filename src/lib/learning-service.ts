@@ -11,52 +11,73 @@ import { modelErrorMessage } from './ai/error-message';
 import { validateExercise, structuralIssues } from './exercise-validation';
 import { recommendationScore } from './recommendation';
 import type { LibraryQuestion } from './knowledge-library';
+import { diagnosisNodeId, diagnosisNodes } from './knowledge-diagnosis';
 
 export class LearningError extends Error {
     constructor(message: string, public status = 400) { super(message); }
 }
 
+type DailyFocus = { point: string; paperCount: number; sources: { name: string; url?: string }[]; errorScore: number };
+
 /** Daily recommendations use one AI generation and one quality review per item, in parallel. */
 async function generateDailyExercises(userId:string,request:LearningRequest,grade:string|null,studentGrade:number|null,userPreferences:string|undefined,progress?: (stage:string)=>void):Promise<LearningExercise[]>{
     let notebookItems:Awaited<ReturnType<typeof prisma.errorItem.findMany<{include:{subject:{select:{name:true}},tags:{select:{name:true}},reviewSchedules:true}}>>> = [];
     let references:LearningExercise[]=[];
+    let focuses:DailyFocus[]=[];
     if(request.source==='notebook'){
-        if(request.notebookId){const notebook=await prisma.subject.findFirst({where:{id:request.notebookId,userId}});if(!notebook)throw new LearningError('错题本不存在或无权访问',404);}
-        notebookItems=await prisma.errorItem.findMany({where:{userId,archivedAt:null,...(request.notebookId?{subjectId:request.notebookId}:{}),questionText:{not:null}},include:{subject:{select:{name:true}},tags:{select:{name:true}},reviewSchedules:true}});
-        notebookItems=shuffleQuestions(notebookItems.filter(item=>item.questionText?.trim()));
-        if(!notebookItems.length)throw new LearningError('这个错题本还没有可出题的内容，先录入一道错题，或切换到网络题库。');
+        if(request.notebookId){const notebook=await prisma.subject.findFirst({where:{id:request.notebookId,userId}});if(!notebook)throw new LearningError('错题本不存在或无权访问',404);if(notebook.name!==request.subject)throw new LearningError('所选错题本与当前科目不匹配',422);}
+        notebookItems=await prisma.errorItem.findMany({where:{userId,archivedAt:null,...(request.notebookId?{subjectId:request.notebookId}:{}),subject:{is:{name:request.subject}},questionText:{not:null}},include:{subject:{select:{name:true}},tags:{select:{name:true}},reviewSchedules:true}});
+        notebookItems=shuffleQuestions(notebookItems.filter(item=>item.subject?.name===request.subject&&item.questionText?.trim()));
+        if(!notebookItems.length)throw new LearningError('这个科目的错题本还没有可出题的内容，先录入一道错题，或切换到网络题库。');
     }else{
         if(!studentGrade)throw new LearningError('请先在账户设置中选择当前年级，再获取年级匹配的作业。',422);
-        const subject=request.subject||shuffleQuestions([...LEARNING_SUBJECTS.filter(name=>name!=='其他')])[0];
-        if(studentGrade<=11){
-            const papers=await prisma.knowledgePaper.findMany({where:{subject,examType:studentGrade<=9?'zhongkao':'gaokao'},select:{title:true,sourceUrl:true,questions:true,subject:true}});
-            references=papers.flatMap(paper=>{
-                let questions:LibraryQuestion[]=[];try{questions=JSON.parse(paper.questions) as LibraryQuestion[];}catch{return [];}
-                return questions.filter(q=>!q.wholePaper&&!q.answerLeakRisk&&q.grade!==null&&q.grade<=studentGrade&&(studentGrade<=9?q.grade<=9:q.grade>=10)&&usableForRecommendation(q)).map(q=>({questionText:q.correctedMarkdown||q.questionHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' '),answerText:q.correctedAnswerMarkdown||q.answerHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' '),analysis:'公开试卷参考答案',subject,knowledgePoints:q.knowledgePoints,difficulty:request.difficulty,provenance:{name:`${paper.title} · 第 ${q.number} 题`,url:paper.sourceUrl,grade:STUDENT_GRADES[q.grade!]}}));
-            });
-        }
-        if(references.length<3){
-            try{references=[...references,...(await loadPublicQuestions(subject)).filter(q=>!structuralIssues({questionText:q.questionText,answerText:q.answerText,analysis:q.analysis||'公开题库'}).length)];}catch{if(!references.length)throw new LearningError('公开题库暂无可用参考题，请更换科目或使用错题本来源。',422);}
+        const subject=request.subject!;
+        const stage=(n:number)=>n<=6?'primary':n<=9?'junior':'senior';
+        const papers=await prisma.knowledgePaper.findMany({where:{subject},select:{id:true,title:true,year:true,examType:true,examGrade:true,status:true,sourceUrl:true,questions:true,subject:true}});
+        const evidence=new Map<string,{papers:Set<string>;sources:{name:string;url?:string}[]}>();
+        references=papers.flatMap(paper=>{
+            if(paper.subject!==subject||stage(paper.examGrade)!==stage(studentGrade)||(paper.examGrade>studentGrade&&studentGrade<=6)||paper.status==='whole_paper'||paper.year>new Date().getFullYear()||!paper.sourceUrl?.trim())return [];
+            let questions:LibraryQuestion[]=[];try{const parsed=JSON.parse(paper.questions);if(Array.isArray(parsed))questions=parsed;}catch{return [];}
+            return questions.filter(q=>q.grade!==null&&typeof q.grade==='number'&&q.grade<=studentGrade&&stage(q.grade)===stage(studentGrade)&&usableForRecommendation(q)).map(q=>{
+                const text=q.correctedMarkdown||q.questionHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ');
+                if(structuralIssues({questionText:text,answerText:q.correctedAnswerMarkdown||q.answerHtml.replace(/<[^>]+>/g,' '),analysis:'公开试卷参考答案'}).length)return null;
+                if(q.locallyReviewed&&q.gradeVerified){
+                    for(const point of new Set(q.knowledgePoints.map(p=>p.trim()).filter(Boolean))){
+                        const entry=evidence.get(point)||{papers:new Set<string>(),sources:[]};
+                        if(!entry.papers.has(paper.id)){entry.papers.add(paper.id);entry.sources.push({name:paper.title,url:paper.sourceUrl});}
+                        evidence.set(point,entry);
+                    }
+                }
+                return {questionText:text,answerText:q.correctedAnswerMarkdown||q.answerHtml.replace(/<[^>]+>/g,' ').replace(/\s+/g,' '),analysis:'公开试卷参考答案',subject,knowledgePoints:q.knowledgePoints,difficulty:request.difficulty,provenance:{name:`${paper.title} · 第 ${q.number} 题`,url:paper.sourceUrl,grade:STUDENT_GRADES[q.grade!]}} as LearningExercise;
+            }).filter((q):q is LearningExercise=>q!==null);
+        });
+        const errors=await prisma.errorItem.findMany({where:{userId,archivedAt:null,subject:{is:{name:subject}}},include:{subject:{select:{name:true}},tags:{select:{name:true}},reviewSchedules:true}});
+        const errorScores=new Map<string,number>();
+        for(const item of errors.filter(item=>item.subject?.name===subject))for(const point of new Set(item.tags.map(tag=>tag.name.trim()).filter(Boolean)))errorScores.set(point,(errorScores.get(point)||0)+recommendationScore(item).score+1);
+        focuses=shuffleQuestions([...new Set([...evidence.keys(),...errorScores.keys()])].map(point=>({point,paperCount:evidence.get(point)?.papers.size||0,sources:evidence.get(point)?.sources||[],errorScore:errorScores.get(point)||0}))).sort((a,b)=>(b.paperCount>=2?1:0)-(a.paperCount>=2?1:0)||b.errorScore-a.errorScore||b.paperCount-a.paperCount);
+        if(studentGrade>=10&&references.length<3){
+            try{references=[...references,...(await loadPublicQuestions(subject)).filter(q=>q.subject===subject&&!structuralIssues({questionText:q.questionText,answerText:q.answerText,analysis:q.analysis||'公开题库'}).length)];}catch{/* 无题库时仍可按课程知识点原创。 */}
         }
         references=shuffleQuestions(references).filter((q,index,list)=>list.findIndex(item=>item.questionText.trim()===q.questionText.trim())===index).slice(0,3);
-        if(references.length<3)throw new LearningError('公开题库不足 3 道可用参考题，请更换科目或使用错题本来源。',422);
     }
     let ai;
     try{ai=getAIService('generate',userId);}catch{throw new LearningError('请先在设置中启用出题模型。',422);}
     let completed=0;
-    progress?.(request.source==='notebook'?'按错题知识点生成练习':'随机抽取 3 道公开题作为参考');
+    progress?.(request.source==='notebook'?'按错题知识点生成练习':'按已收录试卷统计与本学科错题知识点生成练习');
     const work=Array.from({length:request.count},async(_,index)=>{
         const original=notebookItems.length?notebookItems[index%notebookItems.length]:null;
-        const subject=original?.subject?.name||request.subject||references[0]?.subject||'数学';
-        const tags=original?.tags.map(tag=>tag.name).filter(Boolean)||references.flatMap(q=>q.knowledgePoints).filter(Boolean).slice(0,5);
-        const topic=tags.length?tags.join('、'):original?`从这道错题概括知识点：${original.questionText?.slice(0,300)}`:`${grade||'当前年级'}${subject}课程范围内的常见易错知识点`;
+        const subject=request.subject!;
+        const focus=original?null:focuses.length?focuses[index%focuses.length]:null;
+        const selectedReferences=focus?shuffleQuestions(references.filter(q=>q.knowledgePoints.includes(focus.point))).slice(0,3):references;
+        const tags=original?original.tags.map(tag=>tag.name).filter(Boolean):focus?[focus.point]:selectedReferences.flatMap(q=>q.knowledgePoints).filter(Boolean).slice(0,5);
+        const topic=tags.length?tags.join('、'):original?`从这道错题概括知识点：${original.questionText?.slice(0,300)}`:`${grade||'当前年级'}${subject}课程范围内随机选择通用课程知识点`;
         const variation=shuffleQuestions(['基础巩固','概念辨析','条件变化','生活情境应用','综合推理'])[index%5];
-        const referenceBrief=references.length?`\n以下${references.length}道公开题仅供参考题型和知识点，不能照抄；若超出当前年级，必须改为当前年级内容：\n`+references.map((q,i)=>`${i+1}. ${q.questionText.slice(0,450)}；答案：${q.answerText?.slice(0,120)||'待核对'}`).join('\n'):'';
-        const brief=`请按${grade||'当前年级'}${subject}的知识点“${topic}”原创一道可独立作答的练习题。题型：${variation}。不要复述原错题或参考题，不使用未提供的图、音频和材料。给出准确答案、简要解析与易错点。${referenceBrief}\n${curriculumBrief(userPreferences,subject,grade)}`;
+        const referenceBrief=selectedReferences.length?`\n以下${selectedReferences.length}道公开题仅供参考题型和知识点，不能照抄：\n`+selectedReferences.map((q,i)=>`${i+1}. ${q.questionText.slice(0,450)}；答案：${q.answerText?.slice(0,120)||'待核对'}`).join('\n'):'';
+        const brief=`请按${grade||'当前年级'}${subject}的知识点“${topic}”原创一道可独立作答的练习题。${focus?.paperCount && focus.paperCount>=2?`这一知识点在已收录的 ${focus.paperCount} 份经本地校对的同学段试卷中出现，不代表所有历年试卷。`:''}${focus?.errorScore?`此知识点有本学科个人错题记录，优先巩固。`:''}题型：${variation}。不要复述原错题或参考题，不使用未提供的图、音频和材料。给出准确答案、简要解析与易错点。${referenceBrief}\n${curriculumBrief(userPreferences,subject,grade)}`;
         let lastError:unknown;
         for(let attempt=0;attempt<2;attempt++)try{
             const generated=await ai.generateSimilarQuestion(brief,[subject,...tags].slice(0,5),'zh',request.difficulty,grade||original?.gradeSemester);
-            const exercise:LearningExercise={questionText:generated.questionText,answerText:generated.answerText,analysis:generated.analysis,subject,knowledgePoints:generated.knowledgePoints?.length?generated.knowledgePoints:tags,difficulty:request.difficulty,provenance:original?{name:`错题知识点 · ${topic.slice(0,50)}`,url:`/error-items/${original.id}`,originalId:original.id,grade:grade||undefined}:{name:`公开题库 ${references.length} 题参考 · AI 变式`,grade:grade||undefined},referenceSources:references.length?references.map(q=>({name:q.provenance?.name||'公开题库',url:q.provenance?.url})):undefined,recommendationReason:original?'根据错题本知识点随机生成':`随机参考公开题库中的 ${references.length} 道题生成`};
+            const exercise:LearningExercise={questionText:generated.questionText,answerText:generated.answerText,analysis:generated.analysis,subject,knowledgePoints:generated.knowledgePoints?.length?generated.knowledgePoints:tags,difficulty:request.difficulty,provenance:original?{name:`错题知识点 · ${topic.slice(0,50)}`,url:`/error-items/${original.id}`,originalId:original.id,grade:grade||undefined}:{name:selectedReferences.length?'年级匹配公开题参考 · AI 原创':'年级通用课程知识点 · AI 原创',grade:grade||undefined},referenceSources:focus?.paperCount && focus.paperCount>=2?focus.sources:selectedReferences.length?selectedReferences.map(q=>({name:q.provenance?.name||'公开题库',url:q.provenance?.url})):undefined,recommendationReason:original?'根据错题本知识点随机生成':focus?.paperCount && focus.paperCount>=2?`已收录同学段试卷 ${focus.paperCount} 份均涉及「${focus.point}」${focus.errorScore?' · 本学科错题需巩固':''}`:focus?.errorScore?`本学科错题知识点「${focus.point}」需巩固（非历史高频统计）`:selectedReferences.length?'年级匹配的公开题仅供普通参考（非历史高频统计）':'按当前年级通用课程知识点原创（无试卷高频证据）'};
             exercise.provenance.curriculum=curriculumSummary(userPreferences,subject);
             exercise.validation=await validateExercise(exercise,grade||'当前年级',curriculumBrief(userPreferences,subject,grade),userId);
             progress?.(`已完成 ${++completed}/${request.count} 题`);
@@ -76,9 +97,23 @@ export async function generateExercises(userId: string, request: LearningRequest
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { currentGrade: true, educationStage: true, enrollmentYear: true, studyPreferences: true } });
     const studentGrade = currentStudentGrade(user || {});
     const grade = request.grade || (studentGrade ? STUDENT_GRADES[studentGrade] : null);
-    if(request.mode==='daily')return generateDailyExercises(userId,request,grade,studentGrade,user?.studyPreferences||undefined,progress);
+    if(request.mode==='daily'){
+        if(!['语文','数学','英语'].includes(request.subject||''))throw new LearningError('每日推荐请先选择语文、数学或英语',422);
+        return generateDailyExercises(userId,request,grade,studentGrade,user?.studyPreferences||undefined,progress);
+    }
+    let sourceEvidence: { id: string; page: string; excerpt: string; nodeId: string; unitId: string; verified: boolean; node: ReturnType<typeof diagnosisNodes>[number] } | null = null;
+    if (request.evidenceId) {
+        const evidence = await prisma.textbookEvidence.findFirst({ where: { id: request.evidenceId, userId } });
+        const node = diagnosisNodes(studyPreferences(user?.studyPreferences)).find(item => item.id === evidence?.nodeId);
+        if (!evidence || !node || node.subject !== request.subject || node.grade !== grade || request.knowledgePoint && request.knowledgePoint.trim() !== node.term || request.publisher && request.publisher !== node.publisher || request.volume && request.volume !== node.volume) throw new LearningError('教材依据与当前科目、年级或知识点不匹配', 422);
+        const snapshot = JSON.parse(evidence.sourceSnapshot || '{}') as Record<string,string>;
+        if (['publisher','textbook','edition','isbn','grade','volume','chapter'].some(key => snapshot[key] && snapshot[key] !== node[key as keyof typeof node])) throw new LearningError('教材依据属于旧版本，请重新核对本书后出题', 422);
+        if (!evidence.excerpt.trim()) throw new LearningError('请先录入教材原文摘录，再按原文出题；仅有照片尚不能可靠引用', 422);
+        sourceEvidence = { id: evidence.id, page: evidence.page, excerpt: evidence.excerpt, nodeId: node.id, unitId: node.unitId, verified: evidence.verified, node };
+    }
     const requestedUnits = studyPreferences(user?.studyPreferences).studyUnits.filter(unit => (request.unitIds?.includes(unit.id) || request.unitId === unit.id) && unit.subject === request.subject && unit.grade === grade && (!request.publisher || unit.publisher === request.publisher) && (!request.volume || unit.volume === request.volume));
     const requestedUnit = requestedUnits[0] || null;
+    const savedEvidence = requestedUnits.length ? await prisma.textbookEvidence.findMany({ where: { userId, unitId: { in: requestedUnits.map(unit => unit.id) } }, orderBy: { createdAt: 'desc' } }) : [];
     const unitFocuses = requestedUnit ? shuffleQuestions(request.unitMode === 'review' && requestedUnit.entries.some(entry => !entry.mastered) ? requestedUnit.entries.filter(entry => !entry.mastered) : requestedUnit.entries.length ? requestedUnit.entries : requestedUnit.lessons.map(lesson => ({ kind: '知识点' as const, term: lesson.title, meaning: '目录课目主题，未提供课文原文', mastered: false }))) : [];
 
     let originals: { masteryLevel:number;createdAt:Date;reviewSchedules:{scheduledFor:Date;completedAt:Date|null;isCorrect:boolean|null}[]; id: string; questionText: string | null; gradeSemester: string | null; subject: { name: string } | null; tags: { name: string }[] }[] = [];
@@ -130,6 +165,12 @@ export async function generateExercises(userId: string, request: LearningRequest
         const exerciseUnit = requestedUnits.length ? requestedUnits[index % requestedUnits.length] : requestedUnit;
         const exerciseFocuses = exerciseUnit && exerciseUnit !== requestedUnit ? shuffleQuestions(exerciseUnit.entries) : unitFocuses;
         const unitFocus = exerciseFocuses.length ? exerciseFocuses[index % exerciseFocuses.length] : null;
+        const evidenceForFocus = exerciseUnit && unitFocus ? savedEvidence.find(item => {
+            if (item.nodeId !== diagnosisNodeId(exerciseUnit.subject, exerciseUnit.grade, unitFocus.term, exerciseUnit.id) || !item.excerpt.trim()) return false;
+            const snapshot = JSON.parse(item.sourceSnapshot || '{}') as Record<string,string>;
+            return !['publisher','textbook','edition','isbn','grade','volume','chapter'].some(key => snapshot[key] && snapshot[key] !== (key === 'chapter' ? exerciseUnit.title : exerciseUnit[key as keyof typeof exerciseUnit]));
+        }) : undefined;
+        const usedEvidence = sourceEvidence || (evidenceForFocus && exerciseUnit ? { id: evidenceForFocus.id, page: evidenceForFocus.page, excerpt: evidenceForFocus.excerpt, nodeId: evidenceForFocus.nodeId, unitId: exerciseUnit.id, verified: evidenceForFocus.verified, node: diagnosisNodes(studyPreferences(user?.studyPreferences)).find(item => item.id === evidenceForFocus.nodeId)! } : null);
         const tags = original?.tags.map(tag => tag.name) || historyOriginal?.knowledgePoints || (unitFocus ? [exerciseUnit!.title, unitFocus.term] : request.knowledgePoint ? request.knowledgePoint.split(/[，,、]/).map(tag => tag.trim()).filter(Boolean).slice(0, 5) : []);
         const solution=original?await prepareErrorSolution(userId,original.id):null;
         const brief = historyOriginal
@@ -138,7 +179,8 @@ export async function generateExercises(userId: string, request: LearningRequest
             ? `当前年级：${grade || '参考原题年级'}。请严格在当前年级课程范围内出题。学科：${subject}。针对下面错题举一反三，改变条件或情境，不要照抄原题。新题必须自包含，不依赖外部图片。针对不同的变式要求：${variations[index]}。\n原错题：\n${original.questionText}\n已经独立核对的正确答案：${solution?.answerText}\n原题解题思路：${solution?.analysis}`
             : buildLearningBrief({ ...request, subject, grade: grade || '' }, unitFocus ? `${exerciseUnit!.title}中的${unitFocus.kind}：${unitFocus.term}（${unitFocus.meaning}）。请针对这一条随机变化题型和情境，勿重复其他题。` : tags.join('、') || `从${grade || '当前年级'}的${subject}课程知识点中随机选取，严格遵循该年级课程范围，不使用高年级知识；每题选择不同知识点`, variations[index]);
         const curriculum = exerciseUnit ? `当前出题教材与单元：${[exerciseUnit.region, exerciseUnit.publisher, exerciseUnit.textbook, exerciseUnit.grade, exerciseUnit.volume, exerciseUnit.title].filter(Boolean).join(' · ')}。只能使用该单元已录入的学习内容，不得套用其他出版社或册别。` : curriculumBrief(user?.studyPreferences,subject,grade,request.publisher);
-        const generated = await ai.generateSimilarQuestion(brief+'\n'+curriculum, [subject, ...tags].slice(0, 5), 'zh', request.difficulty, grade || original?.gradeSemester);
+        const sourceBrief = usedEvidence ? `\n用户提供的${usedEvidence.verified ? '已核对' : '待核对'}教材摘录：${usedEvidence.excerpt.slice(0, 1000)}。出处：${usedEvidence.node.publisher}《${usedEvidence.node.textbook}》${usedEvidence.node.grade}${usedEvidence.node.volume}，${usedEvidence.node.chapter}${usedEvidence.page ? `第${usedEvidence.page}页` : ''}。只基于此摘录和该知识点生成，题目须自包含；不要声称引用未提供的课文。` : '';
+        const generated = await ai.generateSimilarQuestion(brief+'\n'+curriculum+sourceBrief, [subject, ...tags].slice(0, 5), 'zh', request.difficulty, grade || original?.gradeSemester);
         if (!generated.questionText?.trim() || !generated.answerText?.trim() || !generated.analysis?.trim()) {
             throw new LearningError('AI 返回的题目不完整，请重新生成', 502);
         }
@@ -156,6 +198,8 @@ export async function generateExercises(userId: string, request: LearningRequest
                 : { name: request.unitId || request.unitIds?.length ? `单元${request.unitMode === 'review' ? '复习' : '练习'} · AI 出题` : 'AI 按学习要求生成', grade: grade || undefined },
         };
         exercise.provenance.curriculum=exerciseUnit ? curriculum : curriculumSummary(user?.studyPreferences,subject,request.publisher);
+        if (exerciseUnit) Object.assign(exercise.provenance, { textbook: exerciseUnit.textbook, edition: exerciseUnit.edition, isbn: exerciseUnit.isbn, chapter: exerciseUnit.title, publisher: exerciseUnit.publisher, ...(unitFocus ? { topicId: diagnosisNodeId(exerciseUnit.subject, exerciseUnit.grade, unitFocus.term, exerciseUnit.id) } : {}) });
+        if (usedEvidence) Object.assign(exercise.provenance, { name: usedEvidence.verified ? '已核对教材摘录 · AI 出题' : '待核对教材摘录 · AI 出题', topicId: usedEvidence.nodeId, evidenceId: usedEvidence.id, page: usedEvidence.page, textbook: usedEvidence.node.textbook, edition: usedEvidence.node.edition, isbn: usedEvidence.node.isbn, chapter: usedEvidence.node.chapter, publisher: usedEvidence.node.publisher, url: `/knowledge-library/diagnosis?subject=${encodeURIComponent(usedEvidence.node.subject)}&topic=${usedEvidence.nodeId}` });
         progress?.(`校验第 ${index+1}/${request.count} 题`);
         exercise.validation=await validateExercise(exercise,grade||'当前年级',curriculum,userId);
         if(original)exercise.recommendationReason=recommendationScore(original).reason;
@@ -182,6 +226,7 @@ async function createLearningSet(userId: string, request: LearningRequest, dateK
 export async function getOrCreateLearningSet(userId: string, request: LearningRequest, progress?: (stage:string)=>void) {
     const student = await prisma.user.findUnique({ where: { id: userId }, select: { currentGrade: true, educationStage: true, enrollmentYear: true, studyPreferences:true } });
     const studentGrade = currentStudentGrade(student || {});
+    if(request.mode==='daily'&&!['语文','数学','英语'].includes(request.subject||''))throw new LearningError('每日推荐请先选择语文、数学或英语',422);
     request = { ...request, grade: request.mode === 'daily' ? (studentGrade ? STUDENT_GRADES[studentGrade] : '') : request.grade || (studentGrade ? STUDENT_GRADES[studentGrade] : '') };
     if (request.paperId && (request.mode !== 'ai' || request.source !== 'ai' || request.unitId || request.unitIds?.length)) throw new LearningError('试卷出题请选择单独一份试卷', 400);
     if (request.paperSets && !request.paperId) {
@@ -223,7 +268,7 @@ export async function getOrCreateLearningSet(userId: string, request: LearningRe
         else if (selectedPublisher && !request.paperSets) request = { ...request, prompt: `${request.prompt ? request.prompt + '。' : ''}当前筛选教材没有已核对的知识点；仅按${request.grade}${request.subject}通用课程知识随机出题，不得声称题目来自该教材的目录或课文。` };
     }
     const dateKey = request.mode === 'daily' ? learningDateKey() : null;
-    const selectionKey = createHash('sha256').update(JSON.stringify({...request,curriculum:student?.studyPreferences||'{}',...(request.mode==='daily'?{dailyGeneratorVersion:2}:{})})).digest('hex');
+    const selectionKey = createHash('sha256').update(JSON.stringify({...request,curriculum:student?.studyPreferences||'{}',...(request.mode==='daily'?{dailyGeneratorVersion:3,dailySubject:request.subject}:{})})).digest('hex');
     if (!dateKey) return createLearningSet(userId, request, null, selectionKey, progress);
     const existing = await prisma.learningSet.findUnique({ where: { userId_dateKey_selectionKey: { userId, dateKey, selectionKey } }, include: { records: true } });
     if (existing) {if(existing.archivedAt)throw new LearningError('今天这组练习已在回收站，请从知识库恢复或调整练习选项。',409);return existing;}

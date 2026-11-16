@@ -59,6 +59,7 @@ vi.mock('jsonrepair', () => ({
 // Delayed import to ensure mocks are applied
 import { AzureOpenAIProvider } from '@/lib/ai/azure-provider';
 import type { ParsedQuestion } from '@/lib/ai/types';
+import { usageContext } from '@/lib/ai/usage-context';
 
 type PrivateAzureProvider = {
     parseResponse(text: string): ParsedQuestion;
@@ -69,6 +70,45 @@ type PrivateAzureProvider = {
 function asPrivateProvider(provider: AzureOpenAIProvider): PrivateAzureProvider {
     return provider as unknown as PrivateAzureProvider;
 }
+
+describe('Azure SDK 调用配置与 usage', () => {
+    const provider = new AzureOpenAIProvider({ apiKey: 'test-key', endpoint: 'https://test.openai.azure.com', deploymentName: 'gpt-4o' });
+    const xml = '<question_text>题目</question_text><answer_text>答案</answer_text><analysis>解析</analysis>';
+    beforeEach(() => vi.clearAllMocks());
+
+    it('所有 chat 调用都明确限制超时并关闭 SDK 重试', async () => {
+        mockAzureCompletionCreate.mockResolvedValue({ choices: [{ message: { content: xml } }] });
+        await provider.extractTextbookCatalogPage('data', 'image/png', '说明');
+        await provider.analyzeImage('data', 'image/png');
+        await provider.generateSimilarQuestion('题目', []);
+        await provider.reviewExercise('检查');
+        await provider.reanswerQuestion('题目');
+        mockAzureCompletionCreate.mockResolvedValueOnce({ choices: [{ message: { content: '{"suitable":false,"commands":[],"description":"无"}' } }] });
+        await provider.analyzeForGeogebra('题', '答', '解');
+        expect(mockAzureCompletionCreate).toHaveBeenCalledTimes(6);
+        for (const [, options] of mockAzureCompletionCreate.mock.calls) {
+            expect(options).toEqual({ timeout: expect.any(Number), maxRetries: 0 });
+            expect(options.timeout).toBeGreaterThan(0);
+        }
+    });
+
+    it('翻译限制输出 token 并拒绝截断', async () => {
+        mockAzureCompletionCreate.mockResolvedValueOnce({ choices: [{ finish_reason: 'length', message: { content: '{"sourceText":"a","translatedText":"b"}' } }] });
+        await expect(provider.translateImage('image', 'image/png', '翻译')).rejects.toThrow('AI_RESPONSE_ERROR');
+        expect(mockAzureCompletionCreate.mock.calls[0][0].max_tokens).toBe(1024);
+    });
+
+    it('reviewExercise 只采集上游真实 usage', async () => {
+        const state: { inputTokens?: number; outputTokens?: number } = {};
+        await usageContext.run(state, async () => {
+            mockAzureCompletionCreate.mockResolvedValueOnce({ choices: [{ message: { content: '{}' } }], usage: { prompt_tokens: 11, completion_tokens: 7 } });
+            await provider.reviewExercise('检查');
+            mockAzureCompletionCreate.mockResolvedValueOnce({ choices: [{ message: { content: '{}' } }] });
+            await provider.reviewExercise('检查');
+        });
+        expect(state).toEqual({ inputTokens: 11, outputTokens: 7 });
+    });
+});
 
 describe('Azure OpenAI Provider 初始化', () => {
     beforeEach(() => {

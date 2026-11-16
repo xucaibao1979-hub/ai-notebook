@@ -7,7 +7,7 @@ import { LearningExercise } from '@/lib/learning';
 import { curriculumBrief } from '@/lib/study-preferences';
 import { getAIService } from '@/lib/ai';
 
-const schema = z.object({ setId: z.string().min(1), index: z.number().int().min(0).max(4), action: z.enum(['submit', 'reveal', 'assess', 'explain']), userAnswer: z.string().trim().max(5000).default(''), isCorrect: z.boolean().optional() });
+const schema = z.object({ setId: z.string().min(1), index: z.number().int().min(0).max(11), action: z.enum(['submit', 'reveal', 'assess', 'explain']), userAnswer: z.string().trim().max(5000).default(''), isCorrect: z.boolean().optional() });
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);

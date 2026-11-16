@@ -4,12 +4,12 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { signOut, useSession } from 'next-auth/react';
-import { Sparkles, GraduationCap, Menu, X, LogOut, Library, BookOpen, NotebookTabs, ScanLine, Settings, User, Bot, Shield, Info } from 'lucide-react';
-import { LearnerSwitcher } from '@/components/learner-switcher';
+import { Sparkles, GraduationCap, Menu, X, LogOut, Library, BookOpen, NotebookTabs, ScanLine, Settings, User, Bot, Shield, Info, LayoutGrid } from 'lucide-react';
 import { SettingsDialog } from '@/components/settings-dialog';
 import Image from 'next/image';
 
 const navigation = [
+    { href: '/tools', label: '学习工具', icon: LayoutGrid },
     { href:'/homework',label:'AI批改',icon:ScanLine },
     { href: '/notebooks', label: '错题本', icon: NotebookTabs },
     { href: '/ai-practice', label: 'AI练习', icon: Sparkles },
@@ -35,7 +35,6 @@ export function AppShell({ children }: { children: React.ReactNode }) {
                 <Link href="/" onClick={() => setMobileOpen(false)} className="flex items-center gap-3"><span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-[#4563ee] text-white"><BookOpen className="size-6" aria-hidden="true" /></span><span><span className="block text-2xl font-bold leading-7 tracking-tight text-slate-800">拾题</span><span className="block text-xs text-slate-400">AI 错题本</span></span></Link>
                 <button className="ml-auto md:hidden" aria-label="收起导航" onClick={() => setMobileOpen(false)}><X className="size-4" /></button>
             </div>
-            <div className="px-5 pb-4"><LearnerSwitcher /></div>
             <p className="px-8 pb-4 text-xs text-slate-400">我的学习空间</p>
             <nav aria-label="主导航" className="flex-1 space-y-2 overflow-y-auto px-5">
                 {links.map(({ href, label, icon: Icon }) => {

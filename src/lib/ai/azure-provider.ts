@@ -3,7 +3,7 @@ import { AzureOpenAI } from "openai";
 import { AIService, ParsedQuestion, DifficultyLevel, ReanswerQuestionResult, GeogebraAnalysisResult } from "./types";
 import { generateAnalyzePrompt, generateSimilarQuestionPrompt, generateReanswerPrompt, generateGeogebraPrompt } from './prompts';
 import { getAppConfig } from '../config';
-import { safeParseParsedQuestion } from './schema';
+import { safeParseParsedQuestion, parseAIJson, GeogebraAnalysisSchema } from './schema';
 import { getMathTagsFromDB, getTagsFromDB } from './tag-service';
 import { createLogger } from '../logger';
 import { normalizeMistakeStatusForSave } from '../mistake-status';
@@ -30,6 +30,22 @@ export class AzureOpenAIProvider implements AIService {
     private deployment: string;
     private endpoint: string;
 
+    async translateImage(imageBase64: string, mimeType: string, instructions: string): Promise<string> {
+        const response = await this.client.chat.completions.create({
+            model: this.deployment,
+            messages: [
+                { role: 'system', content: '你是图片文字识别与翻译助手。只识别图片中清晰可见的中文或英文，按原有顺序翻译，不编造模糊文字。只返回 JSON 对象，字段为 sourceText 和 translatedText，均为字符串；没有可辨认文字时两个字段均为空字符串。' },
+                { role: 'user', content: [{ type: 'text', text: instructions }, { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] },
+            ],
+            max_tokens: 1024,
+        }, { timeout: 60000, maxRetries: 0 });
+        captureTokenUsage(response.usage?.prompt_tokens, response.usage?.completion_tokens);
+        if (response.choices[0]?.finish_reason === 'length') throw new Error('AI_RESPONSE_ERROR');
+        const text = response.choices[0]?.message?.content;
+        if (!text?.trim()) throw new Error('AI_RESPONSE_ERROR');
+        return text;
+    }
+
     async extractTextbookCatalogPage(imageBase64: string, mimeType: string, instructions: string): Promise<string> {
         const response = await this.client.chat.completions.create({
             model: this.deployment,
@@ -38,7 +54,7 @@ export class AzureOpenAIProvider implements AIService {
                 { role: 'user', content: [{ type: 'text', text: instructions }, { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] },
             ],
             max_tokens: 5000,
-        });
+        }, { timeout: 90000, maxRetries: 0 });
         captureTokenUsage(response.usage?.prompt_tokens, response.usage?.completion_tokens);
         const text = response.choices[0]?.message?.content;
         if (!text) throw new Error('AI_RESPONSE_ERROR: 教材照片识别结果为空');
@@ -217,7 +233,7 @@ export class AzureOpenAIProvider implements AIService {
                     },
                 ],
                 max_tokens: 8192,
-            });
+            }, { timeout: 60000, maxRetries: 0 });
 
             logger.box('📦 Full API Response', JSON.stringify(response, null, 2));
 
@@ -292,7 +308,7 @@ Knowledge Points: ${knowledgePoints.join(", ")}
                     },
                 ],
                 max_tokens: 8192,
-            });
+            }, { timeout: 60000, maxRetries: 0 });
 
             captureTokenUsage(response.usage?.prompt_tokens,response.usage?.completion_tokens);
             const text = response.choices[0]?.message?.content || "";
@@ -324,7 +340,8 @@ Knowledge Points: ${knowledgePoints.join(", ")}
                 { role: 'user', content: instructions },
             ],
             max_tokens: 1200,
-        });
+        }, { timeout: 45000, maxRetries: 0 });
+        captureTokenUsage(response.usage?.prompt_tokens, response.usage?.completion_tokens);
         const content = response.choices[0]?.message?.content;
         if (!content) throw new Error('校验模型返回空内容');
         return content;
@@ -372,7 +389,7 @@ Knowledge Points: ${knowledgePoints.join(", ")}
                     { role: "user", content: userContent }
                 ],
                 max_tokens: 8192,
-            });
+            }, { timeout: 60000, maxRetries: 0 });
 
             logger.debug({ response: JSON.stringify(response) }, 'Full API response');
 
@@ -430,7 +447,7 @@ Knowledge Points: ${knowledgePoints.join(", ")}
                     { role: "user", content: "请分析上述题目并生成 GeoGebra 演示命令。" }
                 ],
                 max_tokens: 4096,
-            });
+            }, { timeout: 60000, maxRetries: 0 });
 
             captureTokenUsage(response.usage?.prompt_tokens,response.usage?.completion_tokens);
             const text = response.choices[0]?.message?.content || '';
@@ -452,13 +469,7 @@ Knowledge Points: ${knowledgePoints.join(", ")}
                 jsonStr = jsonStr.substring(objStart, objEnd + 1);
             }
 
-            const parsed = JSON.parse(jsonStr);
-
-            return {
-                suitable: Boolean(parsed.suitable),
-                commands: Array.isArray(parsed.commands) ? parsed.commands : [],
-                description: parsed.description || "",
-            };
+            return parseAIJson(jsonStr, GeogebraAnalysisSchema);
         } catch (error) {
             logger.error({ error, stack: error instanceof Error ? error.stack : undefined }, 'Error during GeoGebra analysis');
             this.handleError(error);

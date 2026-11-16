@@ -14,7 +14,7 @@ vi.mock('@/lib/prisma', () => ({ prisma: { studyTask: {
     update: vi.fn(async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => { const row = mocks.rows.get(where.id)!; Object.assign(row, data, { updatedAt: new Date() }); return row; }),
 } } }));
 
-import { GET, POST } from '@/app/api/study-tasks/route';
+import { GET, POST, PATCH } from '@/app/api/study-tasks/route';
 
 beforeEach(() => { vi.clearAllMocks(); mocks.rows.clear(); mocks.session.mockResolvedValue({ user: { id: 'student-1' } }); mocks.generate.mockResolvedValue({ id: 'set-1' }); mocks.publicSet.mockReturnValue({ id: 'set-1', questions: [] }); });
 
@@ -33,4 +33,15 @@ it('persists an exercise task and exposes its completed result to its owner', as
     expect(saved).not.toHaveProperty('input');
     mocks.session.mockResolvedValue({ user: { id: 'student-2' } });
     expect((await GET(new Request('http://localhost/api/study-tasks?id=task-1'))).status).toBe(404);
+});
+
+it('keeps a failed task for retry and completes it after the generator recovers', async () => {
+    mocks.generate.mockRejectedValueOnce(new Error('temporary failure')).mockResolvedValueOnce({ id: 'set-retried' });
+    await POST(new Request('http://localhost/api/study-tasks', { method: 'POST', body: JSON.stringify({ kind: 'exercise', request: { mode: 'ai', source: 'ai', subject: '数学', count: 3 } }) }));
+    await vi.waitFor(() => expect(mocks.rows.get('task-1')?.status).toBe('failed'));
+    expect(mocks.rows.get('task-1')?.input).toContain('数学');
+    expect((await PATCH(new Request('http://localhost/api/study-tasks', { method: 'PATCH', body: JSON.stringify({ id: 'task-1' }) }))).status).toBe(200);
+    await vi.waitFor(() => expect(mocks.rows.get('task-1')?.status).toBe('succeeded'));
+    expect(mocks.rows.get('task-1')?.progress).toBe(100);
+    expect(mocks.rows.get('task-1')?.input).toBe('');
 });

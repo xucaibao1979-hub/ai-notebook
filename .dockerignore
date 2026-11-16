@@ -16,6 +16,9 @@ dist
 # 环境配置
 .env
 .env.*
+**/.env
+**/.env.*
+**/app-config.json
 
 # 单元/集成测试文件
 src/__tests__

@@ -3,7 +3,6 @@ const { hash } = require('bcryptjs');
 
 const DEFAULT_ADMIN = {
     email: 'admin@localhost',
-    password: 'admin',
     username: 'admin',
     name: 'Admin',
     role: 'admin',
@@ -12,27 +11,26 @@ const DEFAULT_ADMIN = {
     enrollmentYear: 2025,
 };
 
-async function seedAdmin({ prisma, hash: hashPassword }) {
-    const existingUser = await prisma.user.findFirst({
-        where: { OR: [{ role: 'admin' }, { email: DEFAULT_ADMIN.email }] },
+async function seedAdmin({ prisma, hash: hashPassword, password = process.env.ADMIN_INITIAL_PASSWORD }) {
+    const existingAdmin = await prisma.user.findFirst({
+        where: { role: 'admin' },
         orderBy: { createdAt: 'asc' },
     });
 
-    if (existingUser) {
-        await prisma.user.update({
-            where: { id: existingUser.id },
-            data: {
-                role: DEFAULT_ADMIN.role,
-                ...(existingUser.username ? {} : { username: DEFAULT_ADMIN.username }),
-                isActive: DEFAULT_ADMIN.isActive,
-                educationStage: existingUser.educationStage ?? DEFAULT_ADMIN.educationStage,
-                enrollmentYear: existingUser.enrollmentYear ?? DEFAULT_ADMIN.enrollmentYear,
-            },
-        });
-        return { action: 'updated', email: DEFAULT_ADMIN.email };
+    if (existingAdmin) {
+        return { action: 'existing' };
     }
 
-    const hashedPassword = await hashPassword(DEFAULT_ADMIN.password, 12);
+    if (!password || password.length < 12 || password.trim() !== password || /^admin$/i.test(password)) {
+        throw new Error('首次创建管理员需要设置至少 12 位的 ADMIN_INITIAL_PASSWORD（不可使用默认密码）。');
+    }
+
+    const occupiedEmail = await prisma.user.findFirst({ where: { email: DEFAULT_ADMIN.email } });
+    if (occupiedEmail) {
+        throw new Error('admin@localhost 已被普通用户占用；不会自动提权，请手动处理后再初始化管理员。');
+    }
+
+    const hashedPassword = await hashPassword(password, 12);
 
     await prisma.user.create({
         data: {
@@ -58,9 +56,8 @@ async function main() {
         if (result.action === 'created') {
             console.log('Success! Admin user created.');
             console.log(`Email: ${result.email}`);
-            console.log(`Password: ${DEFAULT_ADMIN.password}`);
         } else {
-            console.log('Admin user already exists. Updated defaults.');
+            console.log('Existing admin user found; no changes made.');
         }
     } finally {
         await prisma.$disconnect();

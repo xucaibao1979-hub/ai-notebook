@@ -2,7 +2,7 @@ import { captureTokenUsage } from './usage-context';
 import { GoogleGenAI } from "@google/genai";
 import { AIService, ParsedQuestion, DifficultyLevel, AIConfig, ReanswerQuestionResult, GeogebraAnalysisResult } from "./types";
 import { generateAnalyzePrompt, generateSimilarQuestionPrompt, generateGeogebraPrompt } from './prompts';
-import { safeParseParsedQuestion } from './schema';
+import { safeParseParsedQuestion, parseAIJson, GeogebraAnalysisSchema } from './schema';
 import { getAppConfig } from '../config';
 import { getMathTagsFromDB, getTagsFromDB } from './tag-service';
 import { createLogger } from '../logger';
@@ -19,6 +19,18 @@ export class GeminiProvider implements AIService {
     private ai: GoogleGenAI;
     private modelName: string;
     private baseUrl: string;
+
+    async translateImage(imageBase64: string, mimeType: string, instructions: string): Promise<string> {
+        const response = await this.ai.models.generateContent({
+            model: this.modelName,
+            contents: [{ text: `你是图片文字识别与翻译助手。只识别图片中清晰可见的中文或英文，按原有顺序翻译，不编造模糊文字。只返回 JSON 对象，字段为 sourceText 和 translatedText，均为字符串；没有可辨认文字时两个字段均为空字符串。\n${instructions}` }, { inlineData: { mimeType, data: imageBase64 } }],
+            config: { httpOptions: { timeout: 60000 }, maxOutputTokens: 1024 },
+        });
+        captureTokenUsage(response.usageMetadata?.promptTokenCount, response.usageMetadata?.candidatesTokenCount);
+        if (response.candidates?.some(candidate => candidate.finishReason === 'MAX_TOKENS')) throw new Error('AI_RESPONSE_ERROR');
+        if (!response.text?.trim()) throw new Error('AI_RESPONSE_ERROR');
+        return response.text;
+    }
 
     async extractTextbookCatalogPage(imageBase64: string, mimeType: string, instructions: string): Promise<string> {
         const response = await this.ai.models.generateContent({
@@ -42,9 +54,7 @@ export class GeminiProvider implements AIService {
         // 参考：@google/genai 的 GoogleGenAIOptions.httpOptions.baseUrl
         this.ai = new GoogleGenAI({
             apiKey,
-            httpOptions: baseUrl ? {
-                baseUrl: baseUrl
-            } : undefined
+            httpOptions: { baseUrl: baseUrl || undefined, timeout: 60000 }
         });
 
         this.modelName = config?.model || 'gemini-2.0-flash';
@@ -56,44 +66,6 @@ export class GeminiProvider implements AIService {
             baseUrl: this.baseUrl,
             apiKeyPrefix: apiKey.substring(0, 8) + '...'
         }, 'AI Provider initialized');
-    }
-
-    private async retryOperation<T>(operation: () => Promise<T>, maxRetries: number = 3): Promise<T> {
-        let lastError: unknown;
-
-        for (let attempt = 1; attempt <= maxRetries; attempt++) {
-            try {
-                return await operation();
-            } catch (error) {
-                lastError = error;
-                const msg = error instanceof Error ? error.message.toLowerCase() : String(error);
-
-                // Identify retryable errors
-                const isRetryable =
-                    msg.includes('fetch failed') ||
-                    msg.includes('network') ||
-                    msg.includes('connect') ||
-                    msg.includes('503') ||
-                    msg.includes('502') ||  // Bad Gateway
-                    msg.includes('504') ||  // Gateway Timeout
-                    msg.includes('overloaded') ||
-                    msg.includes('timeout') ||
-                    msg.includes('etimedout') ||  // Connection timeout
-                    msg.includes('enotfound') ||  // DNS resolution failed
-                    msg.includes('econnreset') ||
-                    msg.includes('econnrefused') ||  // Connection refused
-                    msg.includes('unavailable');
-
-                if (!isRetryable || attempt === maxRetries) {
-                    throw error;
-                }
-
-                const delay = Math.pow(2, attempt - 1) * 1000; // Exponential backoff: 1s, 2s, 4s
-                logger.warn({ attempt, maxRetries, error: msg, nextRetryDelayMs: delay }, 'Gemini operation failed, retrying...');
-                await new Promise(resolve => setTimeout(resolve, delay));
-            }
-        }
-        throw lastError;
     }
 
     private extractTag(text: string, tagName: string): string | null {
@@ -219,7 +191,7 @@ export class GeminiProvider implements AIService {
 
             logger.box('📤 API Request (发送给 AI 的原始请求)', JSON.stringify(requestParamsForLog, null, 2));
 
-            const response = await this.retryOperation(() => this.ai.models.generateContent({
+            const response = await this.ai.models.generateContent({
                 model: this.modelName,
                 contents: [
                     {
@@ -232,7 +204,7 @@ export class GeminiProvider implements AIService {
                         }
                     }
                 ]
-            }));
+            });
 
             logger.box('📦 Full API Response Metadata', {
                 usageMetadata: response.usageMetadata
@@ -277,10 +249,10 @@ export class GeminiProvider implements AIService {
         logger.box('📝 Full Prompt', prompt);
 
         try {
-            const response = await this.retryOperation(() => this.ai.models.generateContent({
+            const response = await this.ai.models.generateContent({
                 model: this.modelName,
                 contents: prompt
-            }));
+            });
 
             captureTokenUsage(response.usageMetadata?.promptTokenCount,response.usageMetadata?.candidatesTokenCount);
             const text = response.text || '';
@@ -305,10 +277,10 @@ export class GeminiProvider implements AIService {
     }
 
     async reviewExercise(instructions: string): Promise<string> {
-        const response = await this.retryOperation(() => this.ai.models.generateContent({
+        const response = await this.ai.models.generateContent({
             model: this.modelName,
             contents: `你是严格的习题质量审核员。独立解题，只返回一个 JSON 对象，字段为 valid（布尔值）和 reason（简短中文理由），不要使用 XML 或 Markdown。\n${instructions}`,
-        }));
+        });
         captureTokenUsage(response.usageMetadata?.promptTokenCount,response.usageMetadata?.candidatesTokenCount);
         if (!response.text) throw new Error('校验模型返回空内容');
         return response.text;
@@ -341,10 +313,10 @@ export class GeminiProvider implements AIService {
                 contents = prompt;
             }
 
-            const response = await this.retryOperation(() => this.ai.models.generateContent({
+            const response = await this.ai.models.generateContent({
                 model: this.modelName,
                 contents
-            }));
+            });
 
             captureTokenUsage(response.usageMetadata?.promptTokenCount,response.usageMetadata?.candidatesTokenCount);
             const text = response.text || '';
@@ -386,10 +358,10 @@ export class GeminiProvider implements AIService {
         }, 'GeoGebra Analysis Request');
 
         try {
-            const response = await this.retryOperation(() => this.ai.models.generateContent({
+            const response = await this.ai.models.generateContent({
                 model: this.modelName,
                 contents: prompt
-            }));
+            });
 
             captureTokenUsage(response.usageMetadata?.promptTokenCount,response.usageMetadata?.candidatesTokenCount);
             const text = response.text || '';
@@ -411,13 +383,7 @@ export class GeminiProvider implements AIService {
                 jsonStr = jsonStr.substring(objStart, objEnd + 1);
             }
 
-            const parsed = JSON.parse(jsonStr);
-
-            return {
-                suitable: Boolean(parsed.suitable),
-                commands: Array.isArray(parsed.commands) ? parsed.commands : [],
-                description: parsed.description || "",
-            };
+            return parseAIJson(jsonStr, GeogebraAnalysisSchema);
         } catch (error) {
             logger.error({ error, stack: error instanceof Error ? error.stack : undefined }, 'Error during GeoGebra analysis');
             this.handleError(error);

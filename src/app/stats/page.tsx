@@ -6,7 +6,6 @@ import { PracticeStats } from "@/components/practice-stats";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BarChart3, TrendingUp, Activity } from "lucide-react";
 import { DailyMotivation } from '@/components/daily-motivation';
-import { TodayStudyPlan } from '@/components/today-study-plan';
 import { ExamCountdown } from '@/components/exam-countdown';
 
 export default function StatsPage() {
@@ -28,7 +27,6 @@ export default function StatsPage() {
             </div>
 
             <ExamCountdown />
-            <TodayStudyPlan />
             <Tabs defaultValue="wrong" className="w-full">
                 <TabsList className="grid w-full grid-cols-2 mb-6">
                     <TabsTrigger value="wrong" className="flex items-center gap-2">

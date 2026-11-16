@@ -1,3 +1,11 @@
+// 旧练习和错题不一定保存独立的 options 数组，选项可能直接写在题干中。
+export function hasPrintedChoiceOptions(questionText: string, questionHtml?: string | null): boolean {
+    const htmlText = (questionHtml || '').replace(/<\s*br\s*\/?\s*>|<\s*\/\s*(?:p|div|li)\s*>/gi, '\n').replace(/<[^>]*>/g, ' ');
+    const choices = `${questionText}\n${htmlText}`.match(/(?:^|\s)([A-DＡ-Ｄ])\s*[.．、)）]\s*\S/gm) || [];
+    const letters = new Set(choices.map(choice => choice.trim().charAt(0).replace(/[Ａ-Ｄ]/g, letter => String.fromCharCode(letter.charCodeAt(0) - 65248))));
+    return letters.has('A') && letters.has('B');
+}
+
 type PrintSelectableItem = {
     id: string;
 };

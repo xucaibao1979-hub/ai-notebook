@@ -11,7 +11,7 @@ describe('English catalog review candidate', () => {
         const draft = referenceCatalogFor(scope);
         expect(draft?.units).toHaveLength(10);
         expect(draft?.units[0].title).toBe('Unit 1 Clubs in our school');
-        expect(draft?.units.every(unit => unit.entries.length > 0)).toBe(true);
+        expect(draft?.units.every(unit => unit.entries.length === 0)).toBe(true);
     });
     it('never treats another volume or ISBN as the same photographed book', () => {
         expect(referenceCatalogFor({ ...scope, volume: '下册' })).toBeNull();

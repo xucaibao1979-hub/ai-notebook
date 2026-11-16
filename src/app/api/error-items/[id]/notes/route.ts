@@ -13,31 +13,23 @@ export async function PATCH(
 ) {
     const { id } = await params;
     const session = await getServerSession(authOptions);
+    if (!session?.user?.id) return unauthorized("Authentication required");
 
     try {
-        let user;
-        if (session?.user?.email) {
-            user = await prisma.user.findUnique({
-                where: { email: session.user.email },
-            });
+        const body = await req.json();
+        if (!body || typeof body.userNotes !== 'string' || body.userNotes.length > 10000) {
+            return NextResponse.json({ error: 'Invalid userNotes' }, { status: 400 });
         }
 
-        if (!user) {
-            return unauthorized("Authentication required");
-        }
-
-        const { userNotes } = await req.json();
-
-        const errorItem = await prisma.errorItem.update({
-            where: {
-                id: id,
-            },
-            data: {
-                userNotes: userNotes,
-            },
+        const result = await prisma.errorItem.updateMany({
+            where: { id, userId: session.user.id },
+            data: { userNotes: body.userNotes },
         });
+        if (result.count === 0) {
+            return NextResponse.json({ error: 'Error item not found' }, { status: 404 });
+        }
 
-        return NextResponse.json(errorItem);
+        return NextResponse.json({ id, userNotes: body.userNotes });
     } catch (error) {
         logger.error({ error }, 'Error updating notes');
         return internalError("Failed to update notes");

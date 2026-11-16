@@ -26,10 +26,9 @@ ENV DATABASE_URL="file:/app/prisma/dev.db"
 # Pre-compile runtime scripts FIRST (needed for tag seeding)
 RUN npx tsc scripts/rebuild-system-tags.ts --outDir dist-scripts --esModuleInterop --resolveJsonModule --skipLibCheck --module commonjs --target ES2020
 
-# Initialize database: generate client, run migrations, seed admin user, seed system tags
+# Initialize schema and system tags without creating credentials in an image layer
 RUN npx prisma generate \
     && npx prisma migrate deploy \
-    && npx prisma db seed \
     && node ./dist-scripts/scripts/rebuild-system-tags.js
 
 # Next.js collects completely anonymous telemetry data about general usage.
@@ -66,8 +65,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 # Copy Prisma schema and migrations for runtime usage if needed (e.g. for migrations)
 COPY --from=builder --chown=nextjs:nodejs /app/prisma ./prisma
 
-# Copy config directory for runtime
-COPY --from=builder --chown=nextjs:nodejs /app/config ./config
+# Create an empty writable config directory; inject runtime settings via a volume or environment
+RUN mkdir -p /app/config && chown nextjs:nodejs /app/config
 
 # Copy pre-compiled runtime scripts
 COPY --from=builder --chown=nextjs:nodejs /app/dist-scripts ./dist-scripts

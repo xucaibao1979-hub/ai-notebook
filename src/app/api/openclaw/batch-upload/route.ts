@@ -6,6 +6,7 @@ import { calculateGrade } from "@/lib/grade-calculator";
 import { inferSubjectFromName } from "@/lib/knowledge-tags";
 import { findParentTagIdForGrade } from "@/lib/tag-recognition";
 import { compare } from "bcryptjs";
+import { decodeSavedHomeworkImage } from "@/lib/homework-image";
 
 const logger = createLogger('api:openclaw:batch-upload');
 
@@ -34,8 +35,8 @@ interface OpenclawResponse {
     error?: string;
 }
 
-function validateImage(base64: string, filename: string): { valid: boolean; error?: string } {
-    if (!base64 || base64.length === 0) {
+function validateImage(base64: string, filename: string, mimeType: string): { valid: boolean; error?: string } {
+    if (typeof base64 !== 'string' || !base64.length || typeof filename !== 'string' || typeof mimeType !== 'string') {
         return { valid: false, error: '图片数据为空' };
     }
 
@@ -44,9 +45,18 @@ function validateImage(base64: string, filename: string): { valid: boolean; erro
         return { valid: false, error: `不支持的图片格式: ${extension}，仅支持 JPG、PNG` };
     }
 
+    const expectedMime = extension === '.png' ? 'image/png' : 'image/jpeg';
+    if (!ALLOWED_MIME_TYPES.includes(mimeType) || mimeType !== expectedMime) {
+        return { valid: false, error: '图片格式与文件名不匹配' };
+    }
+
     const estimatedSize = (base64.length * 3) / 4;
     if (estimatedSize > MAX_IMAGE_SIZE) {
         return { valid: false, error: `图片大小超过限制: ${Math.round(estimatedSize / 1024 / 1024)}MB > 5MB` };
+    }
+    const decoded = decodeSavedHomeworkImage(`data:${mimeType};base64,${base64}`);
+    if (!decoded || decoded.bytes.length > MAX_IMAGE_SIZE) {
+        return { valid: false, error: '图片数据无效' };
     }
 
     return { valid: true };
@@ -117,7 +127,7 @@ async function createErrorItem(
     const tagNames: string[] = Array.isArray(knowledgePoints) ? knowledgePoints : [];
     const tagConnections: { id: string }[] = [];
 
-    const subject = subjectId ? await prisma.subject.findUnique({ where: { id: subjectId } }) : null;
+    const subject = subjectId ? await prisma.subject.findFirst({ where: { id: subjectId, userId } }) : null;
     const subjectKey = subject ? inferSubjectFromName(subject.name) : null;
 
     const user = await prisma.user.findUnique({
@@ -251,9 +261,11 @@ export async function POST(req: Request) {
             // 从数据库查找用户（支持邮箱或用户名登录）
             user = await prisma.user.findFirst({
                 where: {
+                    isActive: true,
+                    parentUserId: null,
                     OR: [
                         { email: username },
-                        { name: username }
+                        { username: username }
                     ]
                 }
             });
@@ -316,7 +328,7 @@ export async function POST(req: Request) {
             });
         }
 
-        if (!dbUser) {
+        if (!dbUser || !dbUser.isActive || dbUser.parentUserId) {
             logger.warn({ userEmail }, 'User not found');
             return createErrorResponse(
                 '用户不存在',
@@ -324,6 +336,11 @@ export async function POST(req: Request) {
                 ErrorCode.USER_NOT_FOUND,
                 'User not found'
             );
+        }
+
+        if (subjectId != null && (typeof subjectId !== 'string' ||
+            !await prisma.subject.findFirst({ where: { id: subjectId, userId: dbUser.id }, select: { id: true } }))) {
+            return createErrorResponse('科目不存在', 400, ErrorCode.BAD_REQUEST, 'Invalid subjectId');
         }
 
         const timeout = parseInt(process.env.OPENCLAW_TIMEOUT || '30000', 10);
@@ -339,7 +356,7 @@ export async function POST(req: Request) {
             const imageData = images[i] as ImageData;
             const { base64, mimeType, filename } = imageData;
 
-            const validation = validateImage(base64, filename);
+            const validation = validateImage(base64, filename, mimeType);
             if (!validation.valid) {
                 logger.warn({ index: i, filename, error: validation.error }, 'Image validation failed');
                 results.push({
