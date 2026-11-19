@@ -240,7 +240,7 @@ export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
                 ...(daily && source === 'notebook' && notebookId ? { notebookId } : {}),
                 prompt: daily ? '' : prompt, knowledgePoint: daily ? '' : knowledgePoint,
                 grade: daily ? '' : grade || recommendedGrade, ...(!daily && volume ? { volume } : {}), difficulty: daily && source === 'network' ? 'medium' : difficulty, count,
-                ...(daily ? { refreshId: crypto.randomUUID() } : {}),
+                ...(daily ? { refreshId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` } : {}),
             },setProgress);
             setSet(result); setExerciseView(true); setToday(learningDateKey());
             window.history.pushState(null, '', `${daily ? '/daily' : '/ai-practice'}?set=${encodeURIComponent(result.id)}`);
