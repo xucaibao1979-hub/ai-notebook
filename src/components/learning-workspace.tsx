@@ -18,6 +18,7 @@ import { MarkdownRenderer } from '@/components/markdown-renderer';
 import { GradeProfile, currentStudentGrade, STUDENT_GRADES } from '@/lib/student-grade';
 import { UnitLearning } from '@/components/unit-learning';
 import { getPrintedChoiceLetters } from '@/lib/print-preview';
+import { createRefreshId } from '@/lib/refresh-id';
 
 const difficultyOptions = [{ value: 'easy', label: '基础' }, { value: 'medium', label: '适中' }, { value: 'hard', label: '进阶' }, { value: 'harder', label: '挑战' }] as const;
 const selectClass = 'h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-9 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100';
@@ -240,7 +241,7 @@ export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
                 ...(daily && source === 'notebook' && notebookId ? { notebookId } : {}),
                 prompt: daily ? '' : prompt, knowledgePoint: daily ? '' : knowledgePoint,
                 grade: daily ? '' : grade || recommendedGrade, ...(!daily && volume ? { volume } : {}), difficulty: daily && source === 'network' ? 'medium' : difficulty, count,
-                ...(daily ? { refreshId: `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` } : {}),
+                ...(daily ? { refreshId: createRefreshId() } : {}),
             },setProgress);
             setSet(result); setExerciseView(true); setToday(learningDateKey());
             window.history.pushState(null, '', `${daily ? '/daily' : '/ai-practice'}?set=${encodeURIComponent(result.id)}`);
