@@ -55,12 +55,14 @@ function PrintContent() {
     }
 
     const chosen = items.filter(row => selected.has(row.key));
+    const compact = params.get('mode') === 'sets';
+    const sheetTitle = compact ? '历史习题卷' : '错题重做卷';
     const photoOnly = chosen.filter(row => !row.questionHtml?.trim() && !row.questionText.trim());
     const showPhotos = edition === 'answer' && includePhotos;
 
-    return <main className="mx-auto max-w-4xl space-y-5 p-5 print:p-0">
+    return <main className="print-study-sheet mx-auto max-w-4xl space-y-5 p-5 print:m-0 print:max-w-none print:space-y-0 print:p-0">
         <section className="space-y-3 rounded-xl border bg-white p-4 print:hidden">
-            <h1 className="text-xl font-semibold">错题重做卷 · 打印预览</h1>
+            <h1 className="text-xl font-semibold">{sheetTitle} · 打印预览</h1>
             <p className="text-sm text-slate-600">保留列表传入的选题，两版使用同一组选题，无需刷新。学生版不含答案、解析和原题照片；原照片可能含已有作答，仅答案版可选择附带。</p>
             <div className="flex flex-wrap items-center gap-3">
                 <Button variant="outline" onClick={() => setSelected(new Set(items.map(row => row.key)))}>全选</Button>
@@ -96,10 +98,10 @@ function PrintContent() {
         </section>
         {!!photoOnly.length && edition === 'student' && <p className="hidden border border-amber-500 p-4 text-center print:block">本组选题含仅有照片的题目，无法安全生成学生版。请返回预览页剔除这些题目或补充文字题干后重试。</p>}
         {!!chosen.length && <div className={`border-b pb-3 text-center print:mb-6 ${photoOnly.length && edition === 'student' ? 'print:hidden' : ''}`}>
-            <h2 className="text-2xl font-bold">错题重做卷 · {edition === 'student' ? '学生版' : '答案版'}</h2>
+            <h2 className="text-2xl font-bold">{sheetTitle} · {edition === 'student' ? '学生版' : '答案版'}</h2>
             <p className="text-sm text-slate-600">共 {chosen.length} 题{edition === 'student' ? ' · 选择题在括号内作答，其余题目在题下作答' : ' · 附参考答案与解析'}</p>
         </div>}
-        {chosen.map((row, index) => <article key={row.key} className={`break-inside-avoid rounded-xl border bg-white p-5 print:rounded-none print:border-0 print:border-b ${photoOnly.length && edition === 'student' ? 'print:hidden' : ''}`}>
+        {chosen.map((row, index) => <article key={row.key} className={`rounded-xl border bg-white p-5 print:rounded-none print:border-0 print:border-b print:px-0 print:py-2 ${photoOnly.length && edition === 'student' ? 'print:hidden' : ''}`}>
             <h3 className="mb-3 text-base font-semibold">第 {index + 1} 题 · {row.title}</h3>
             {row.questionHtml ? <div className="library-question-content" dangerouslySetInnerHTML={{ __html: row.questionHtml }} /> : row.questionText ? <MarkdownRenderer content={row.questionText} /> : <p className="text-sm text-slate-600">本题仅有原题照片，学生版不附带可能包含已作答内容的照片。</p>}
             {showPhotos && row.image && <figure className="mt-3"><img src={row.image} alt="原题照片（可能含学生作答）" className="max-h-[16cm] max-w-full object-contain" /><figcaption className="text-xs text-slate-500">原题照片（可能包含学生作答）</figcaption></figure>}
@@ -107,7 +109,7 @@ function PrintContent() {
                 <h4 className="text-sm font-semibold">参考答案与解析</h4>
                 {row.answerHtml ? <div className="library-question-content" dangerouslySetInnerHTML={{ __html: row.answerHtml }} /> : <MarkdownRenderer content={row.answerText || '暂无参考答案'} />}
                 {row.analysis && <MarkdownRenderer content={row.analysis} />}
-            </div> : !(row.isChoiceQuestion || hasPrintedChoiceOptions(row.questionText, row.questionHtml)) && <div className="mt-5 min-h-20 border-b border-dashed" aria-label={`第 ${index + 1} 题作答区`} />}
+            </div> : !(row.isChoiceQuestion || hasPrintedChoiceOptions(row.questionText, row.questionHtml)) && <div className={`mt-3 border-b border-dashed ${compact ? 'min-h-12' : 'min-h-20'}`} aria-label={`第 ${index + 1} 题作答区`} />}
         </article>)}
     </main>;
 }

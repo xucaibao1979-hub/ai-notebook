@@ -70,3 +70,6 @@ upload_test_output*.txt
 # data
 /data/
 .next-prebuilt/
+
+# Images downloaded while syncing public question sources
+/public/knowledge-assets/

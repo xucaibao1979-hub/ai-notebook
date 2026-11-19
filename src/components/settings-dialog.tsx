@@ -29,6 +29,7 @@ import { ModelTaskPanel } from '@/components/model-task-panel';
 import { StudyCatalogPanel } from '@/components/study-catalog-panel';
 import { LearnerSwitcher } from '@/components/learner-switcher';
 import { CompleteBackupPanel } from '@/components/complete-backup-panel';
+import { BackupScopeInfo, SystemBackupPanel } from '@/components/system-backup-panel';
 import { AccountSettings } from '@/components/admin/account-settings';
 import { PROVIDER_PRESETS, ProviderPreset } from '@/lib/ai/provider-presets';
 import { GradePicker } from '@/components/grade-picker';
@@ -37,6 +38,7 @@ import { frontendLogger } from "@/lib/frontend-logger";
 import { AppConfig, UserProfile, UpdateUserProfileRequest, OpenAIInstance } from "@/types/api";
 import { ModelSelector } from "@/components/ui/model-selector";
 import { PromptSettings } from "@/components/settings/prompt-settings";
+import { CodexLoginPanel } from '@/components/settings/codex-login-panel';
 
 import { MessageSquareText } from "lucide-react";
 const MAX_OPENAI_INSTANCES = 20;
@@ -173,7 +175,7 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
             if (!instance.name?.trim()) {
                 return t.settings?.ai?.validationNameRequired || '实例名称不能为空';
             }
-            if (!instance.apiKey?.trim()) {
+            if (!instance.apiKey?.trim() && instance.authMode !== 'codex-cli') {
                 return t.settings?.ai?.validationApiKeyRequired || 'API Key 不能为空';
             }
             if (!instance.baseUrl?.trim()) {
@@ -218,7 +220,8 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
 
         setSaving(true);
         try {
-            await apiClient.post("/api/settings", config);
+            const updated = await apiClient.post<AppConfig>("/api/settings", config);
+            setConfig(updated);
             setModelEditorOpen(false);
             alert(t.settings?.messages?.saved || "Settings saved");
             // 保存成功后滚动到顶部，方便关闭对话框
@@ -538,13 +541,14 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
 
     const selectProviderPreset = (preset: ProviderPreset) => {
         const instances = config.openai?.instances || [];
-        const existing = instances.find(instance => instance.providerId === preset.id);
-        if (!existing && instances.length >= MAX_OPENAI_INSTANCES) {
-            alert('已达到服务实例上限，请先删除不用的实例。');
+        const draft = modelEditorOpen ? instances.find(instance => instance.id === selectedInstanceId && !instance.providerId && !instance.apiKey?.trim()) : undefined;
+        if (!draft && instances.length >= MAX_OPENAI_INSTANCES) {
+            setModelActionError('已达到服务实例上限，请先删除不用的实例。');
             return;
         }
-        const instance = existing || { id: generateId(), name: preset.name, apiKey: '', baseUrl: preset.baseUrl, model: preset.model, providerId: preset.id, apiMode: preset.apiMode };
-        setConfig(previous => ({ ...previous, aiProvider: 'openai', openai: { instances: existing ? instances : [...instances, instance], activeInstanceId: instance.id } }));
+        const instance = { ...(draft || { id: generateId(), apiKey: '' }), name: preset.name, baseUrl: preset.baseUrl, model: preset.model, providerId: preset.id, apiMode: preset.apiMode, authMode: preset.id === 'codex' ? 'codex-cli' as const : undefined };
+        setConfig(previous => ({ ...previous, aiProvider: 'openai', openai: { instances: draft ? instances.map(item => item.id === draft.id ? instance : item) : [...instances, instance], activeInstanceId: instance.id } }));
+        setModelActionError('');
         setSelectedInstanceId(instance.id);
         setTestResult(null);
     };
@@ -595,7 +599,7 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
         try {
             const current = await apiClient.get<AppConfig>('/api/settings');
             const remaining = (current.openai?.instances || []).filter(instance => instance.id !== instanceId);
-            const nextOpenAI = remaining.find(instance => instance.apiKey?.trim())?.id || '';
+            const nextOpenAI = remaining.find(instance => instance.apiKey?.trim() || instance.authMode === 'codex-cli')?.id || '';
             const nextProvider = (excluded: 'openai' | 'gemini' | 'azure'): AppConfig['aiProvider'] => {
                 if (excluded !== 'openai' && nextOpenAI) return 'openai';
                 if (excluded !== 'gemini' && current.gemini?.apiKey) return 'gemini';
@@ -663,7 +667,7 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
             const provider = target?.provider || config.aiProvider;
             if (provider === 'openai') {
                 const instance = target?.instance || getSelectedInstance();
-                  if (!instance?.apiKey) {
+                  if (!instance?.apiKey && instance?.authMode !== 'codex-cli') {
                     setTestResult({ success: false, textSupport: false, visionSupport: false, textError: t.settings?.ai?.validationApiKeyRequired || 'API Key is required' });
                     setTesting(false);
                       return;
@@ -679,6 +683,8 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
                       baseUrl: instance.baseUrl,
                       model: instance.model,
                       apiMode: instance.apiMode || 'chat',
+                    authMode: instance.authMode,
+                    providerId: instance.providerId,
                     language: language
                 };
             } else if (provider === 'gemini') {
@@ -746,8 +752,8 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
                     <span className={sidebar ? '' : 'sr-only'}>{t.settings?.title || "设置"}</span>
                 </Button>
             </DialogTrigger>}
-            <DialogContent ref={dialogContentRef} className="w-[calc(100vw-2rem)] sm:max-w-[1100px] h-[min(85vh,850px)] overflow-hidden flex flex-col">
-                <DialogHeader>
+            <DialogContent ref={dialogContentRef} className={modelEditorOpen && activeSettingsTab === 'ai' ? 'flex h-[100dvh] w-screen max-w-none flex-col overflow-hidden rounded-none p-4 sm:max-w-none sm:p-6' : 'w-[calc(100vw-2rem)] sm:max-w-[1100px] h-[min(85vh,850px)] overflow-hidden flex flex-col'}>
+                <DialogHeader className={modelEditorOpen && activeSettingsTab === 'ai' ? 'sr-only' : ''}>
                     <DialogTitle>{t.settings?.title || "Settings"}</DialogTitle>
                     <DialogDescription>
                         {t.settings?.desc || 'Manage your preferences and data.'}
@@ -755,7 +761,7 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
                 </DialogHeader>
 
                 <Tabs value={activeSettingsTab} onValueChange={setActiveSettingsTab} className="flex min-h-0 w-full flex-1 flex-col gap-4 sm:flex-row">
-                    <TabsList className="flex h-auto w-full shrink-0 flex-row flex-wrap items-start justify-start gap-1 overflow-y-auto rounded-lg bg-slate-50 p-2 sm:w-52 sm:flex-col sm:flex-nowrap">
+                    <TabsList className={`${modelEditorOpen && activeSettingsTab === 'ai' ? 'hidden' : 'flex'} h-auto w-full shrink-0 flex-row flex-wrap items-start justify-start gap-1 overflow-y-auto rounded-lg bg-slate-50 p-2 sm:w-52 sm:flex-col sm:flex-nowrap`}>
                         <TabsTrigger value="general" className="justify-start gap-2 px-2 sm:w-full sm:px-3">
                             <Languages className="h-4 w-4" />
                             <span className="">{t.settings?.tabs?.general || "General"}</span>
@@ -982,6 +988,8 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
                             </div>
                         )}
                         <CompleteBackupPanel />
+                        <BackupScopeInfo />
+                        {(session?.user as any)?.role === 'admin' && <SystemBackupPanel />}
                     </TabsContent>
 
                     <TabsContent value="study" className="space-y-4 py-4">
@@ -990,27 +998,27 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
 
                     {/* AI Tab */}
                     <TabsContent value="ai" className="space-y-4 py-4">
-                        <div className="mx-auto w-full max-w-3xl pt-3">
+                        {!modelEditorOpen && <div className="mx-auto w-full max-w-3xl pt-3">
                             <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6">
-                                <div className="flex items-start justify-between gap-4"><h3 className="text-base font-semibold text-slate-900">自定义模型</h3><Button type="button" variant="outline" size="sm" onClick={() => { addOpenAIInstance(); setConfig(prev => ({ ...prev, aiProvider: 'openai' })); setModelEditorOpen(true); setTestResult(null); }}>添加模型</Button></div>
+                                <div className="flex items-start justify-between gap-4"><h3 className="text-base font-semibold text-slate-900">已保存模型（含待配置）</h3><Button type="button" variant="outline" size="sm" onClick={() => { if ((config.openai?.instances?.length || 0) >= MAX_OPENAI_INSTANCES) { setModelActionError('已达到服务实例上限，请先删除不用的实例。'); return; } addOpenAIInstance(); setConfig(prev => ({ ...prev, aiProvider: 'openai' })); setModelEditorOpen(true); setTestResult(null); }}>添加模型</Button></div>
                                 <div className="mt-4 divide-y border-t border-slate-200 empty:hidden">
-                                    {(config.openai?.instances || []).filter(instance => instance.name?.trim() && instance.model?.trim() && instance.apiKey?.trim()).map(instance => <div key={instance.id} className="flex flex-wrap items-center gap-3 py-4 text-sm"><Bot className="size-5 shrink-0 text-indigo-500" /><div className="min-w-0 flex-1"><span className="font-semibold text-slate-800">{instance.name}</span><span className="ml-2 text-xs text-slate-500">{config.aiProvider === 'openai' && config.openai?.activeInstanceId === instance.id ? '当前使用 · ' : ''}{instance.model} · {instance.providerId || 'OpenAI 兼容'}</span></div><div className="flex items-center gap-1"><Button type="button" variant="ghost" size="sm" disabled={testing} onClick={() => handleTestConnection({ provider: 'openai', instance, key: instance.id })}>{testing && testingModelKey === instance.id ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <Zap className="mr-1 size-3.5" />}测试</Button><Button type="button" variant="ghost" size="sm" onClick={() => { setConfig(prev => ({ ...prev, aiProvider: 'openai' })); setSelectedInstanceId(instance.id); setModelEditorOpen(true); setTestResult(null); }}>编辑</Button><Button type="button" variant="ghost" size="sm" className="text-red-500 hover:text-red-600" disabled={saving} onClick={() => removeSavedModel('openai', instance.id)} aria-label="删除模型"><Trash2 className="size-3.5" /></Button></div></div>)}
+                                    {(config.openai?.instances || []).filter(instance => instance.name?.trim() || instance.model?.trim()).map(instance => <div key={instance.id} className="flex flex-wrap items-center gap-3 py-4 text-sm"><Bot className="size-5 shrink-0 text-indigo-500" /><div className="min-w-0 flex-1"><span className="font-semibold text-slate-800">{instance.name}</span><span className="ml-2 text-xs text-slate-500">{config.aiProvider === 'openai' && config.openai?.activeInstanceId === instance.id ? '当前使用 · ' : ''}{instance.model || '待填写模型 ID'} · {instance.providerId || 'OpenAI 兼容'}{!instance.apiKey?.trim() && instance.authMode !== 'codex-cli' ? ' · 待配置密钥' : instance.authMode === 'codex-cli' ? ' · 网页登录' : ''}</span></div><div className="flex items-center gap-1"><Button type="button" variant="ghost" size="sm" disabled={testing} onClick={() => handleTestConnection({ provider: 'openai', instance, key: instance.id })}>{testing && testingModelKey === instance.id ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <Zap className="mr-1 size-3.5" />}测试</Button><Button type="button" variant="ghost" size="sm" onClick={() => { setConfig(prev => ({ ...prev, aiProvider: 'openai' })); setSelectedInstanceId(instance.id); setModelEditorOpen(true); setTestResult(null); }}>编辑</Button><Button type="button" variant="ghost" size="sm" className="text-red-500 hover:text-red-600" disabled={saving} onClick={() => removeSavedModel('openai', instance.id)} aria-label="删除模型"><Trash2 className="size-3.5" /></Button></div></div>)}
                                     {config.gemini?.apiKey && <div className="flex flex-wrap items-center gap-3 py-4 text-sm"><Bot className="size-5 shrink-0 text-indigo-500" /><div className="min-w-0 flex-1"><span className="font-semibold text-slate-800">{config.gemini.model || 'Google Gemini'}</span><span className="ml-2 text-xs text-slate-500">{config.aiProvider === 'gemini' ? '当前使用 · ' : ''}Google Gemini</span></div><div className="flex items-center gap-1"><Button type="button" variant="ghost" size="sm" disabled={testing} onClick={() => handleTestConnection({ provider: 'gemini', key: 'gemini' })}>{testing && testingModelKey === 'gemini' ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <Zap className="mr-1 size-3.5" />}测试</Button><Button type="button" variant="ghost" size="sm" onClick={() => { setConfig(prev => ({ ...prev, aiProvider: 'gemini' })); setModelEditorOpen(true); setTestResult(null); }}>编辑</Button><Button type="button" variant="ghost" size="sm" className="text-red-500 hover:text-red-600" disabled={saving} onClick={() => removeSavedModel('gemini')} aria-label="删除模型"><Trash2 className="size-3.5" /></Button></div></div>}
                                     {config.azure?.apiKey && <div className="flex flex-wrap items-center gap-3 py-4 text-sm"><Bot className="size-5 shrink-0 text-indigo-500" /><div className="min-w-0 flex-1"><span className="font-semibold text-slate-800">{config.azure.model || config.azure.deploymentName || 'Azure OpenAI'}</span><span className="ml-2 text-xs text-slate-500">{config.aiProvider === 'azure' ? '当前使用 · ' : ''}Azure OpenAI</span></div><div className="flex items-center gap-1"><Button type="button" variant="ghost" size="sm" disabled={testing} onClick={() => handleTestConnection({ provider: 'azure', key: 'azure' })}>{testing && testingModelKey === 'azure' ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <Zap className="mr-1 size-3.5" />}测试</Button><Button type="button" variant="ghost" size="sm" onClick={() => { setConfig(prev => ({ ...prev, aiProvider: 'azure' })); setModelEditorOpen(true); setTestResult(null); }}>编辑</Button><Button type="button" variant="ghost" size="sm" className="text-red-500 hover:text-red-600" disabled={saving} onClick={() => removeSavedModel('azure')} aria-label="删除模型"><Trash2 className="size-3.5" /></Button></div></div>}
                                 </div>
+                                <div className="mt-5 border-t pt-4"><h4 className="mb-3 text-sm font-semibold text-slate-700">可添加的 AI 提供商</h4><div className="grid grid-cols-2 gap-2 sm:grid-cols-3">{PROVIDER_PRESETS.map(preset => <button type="button" key={preset.id} className="rounded-lg border border-slate-200 px-3 py-2 text-left text-xs text-slate-700 hover:border-indigo-400 hover:bg-indigo-50" onClick={() => { selectProviderPreset(preset); setModelEditorOpen(true); setTestResult(null); }}>{preset.name}</button>)}<button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-left text-xs text-slate-700 hover:border-indigo-400 hover:bg-indigo-50" onClick={() => { setConfig(prev => ({ ...prev, aiProvider: 'gemini' })); setModelEditorOpen(true); }}>Google Gemini</button><button type="button" className="rounded-lg border border-slate-200 px-3 py-2 text-left text-xs text-slate-700 hover:border-indigo-400 hover:bg-indigo-50" onClick={() => { setConfig(prev => ({ ...prev, aiProvider: 'azure' })); setModelEditorOpen(true); }}>Azure OpenAI</button></div><p className="mt-2 text-xs text-slate-500">预设只填充服务地址与示例模型；使用前需填写自己的 API Key，测试并保存。</p></div>
                                 {modelActionError && <p role="alert" className="mt-2 text-xs text-red-600">{modelActionError}</p>}
                                 {testResult && !modelEditorOpen && <p role="status" className={`mt-1 text-xs ${testResult.success ? 'text-emerald-700' : 'text-red-600'}`}>{testResult.success ? '连接测试成功' : `连接测试失败：${testResult.textError || '请检查模型配置'}`}</p>}
                             </div>
-                        </div>
-                        {modelEditorOpen && <>
-                        <div className="flex items-center justify-between"><h3 className="text-sm font-semibold">模型服务配置</h3><Button type="button" variant="ghost" size="sm" onClick={() => setModelEditorOpen(false)}>收起配置</Button></div>
+                        </div>}
+                        {modelEditorOpen && <div className="mx-auto w-full max-w-4xl space-y-4" role="region" aria-label="添加或编辑模型页面">
+                        <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white py-3"><div><h3 className="text-lg font-semibold text-slate-900">添加或编辑模型</h3><p className="text-xs text-slate-500">{getSelectedInstance()?.authMode === 'codex-cli' ? '使用浏览器登录 Codex，测试后保存模型' : '选择服务商，填写密钥和模型 ID，测试后保存'}</p></div><Button type="button" variant="outline" size="sm" onClick={() => { setModelEditorOpen(false); setTestResult(null); void fetchSettings(); }}>返回模型列表</Button></div>
                         <p className="text-xs text-slate-500">自定义拍照模型：点击下方“添加”创建模型实例，在“模型名称”输入框填入服务商提供的图片识别模型 ID，测试并保存后，在上方“拍照批改专用模型”中选用。</p>
                         <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4">
-                            <details><summary className="cursor-pointer text-sm font-semibold text-slate-700">展开选择模型服务</summary>
-                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">{PROVIDER_PRESETS.map(preset => <button key={preset.id} type="button" onClick={() => selectProviderPreset(preset)} aria-pressed={config.aiProvider === 'openai' && getSelectedInstance()?.providerId === preset.id} className={`rounded-lg border px-3 py-2.5 text-left text-xs transition-colors ${config.aiProvider === 'openai' && getSelectedInstance()?.providerId === preset.id ? 'border-indigo-400 bg-white font-semibold text-indigo-600' : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-300'}`}>{preset.name}</button>)}</div>
-                            <p className="mt-3 text-xs leading-6 text-slate-400">选择服务商会自动填入接口预设，保留已配置的其他实例。填写自己的 API 密钥与已开通的模型，测试通过后保存并启用。Google Gemini 与 Azure OpenAI 仍可在下方选择。</p>
+                            <h4 className="mb-3 text-sm font-semibold text-slate-700">选择 AI 提供商 · 常用服务</h4>
+                            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">{PROVIDER_PRESETS.map(preset => <button key={preset.id} type="button" onClick={() => selectProviderPreset(preset)} aria-pressed={config.aiProvider === 'openai' && getSelectedInstance()?.providerId === preset.id} className={`rounded-lg border px-3 py-2.5 text-left text-xs transition-colors ${config.aiProvider === 'openai' && getSelectedInstance()?.providerId === preset.id ? 'border-indigo-400 bg-white font-semibold text-indigo-600' : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-300'}`}>{preset.name}</button>)}<button type="button" onClick={() => setConfig(previous => ({ ...previous, aiProvider: 'gemini' }))} aria-pressed={config.aiProvider === 'gemini'} className={`rounded-lg border px-3 py-2.5 text-left text-xs ${config.aiProvider === 'gemini' ? 'border-indigo-400 bg-white font-semibold text-indigo-600' : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-300'}`}>Google Gemini</button><button type="button" onClick={() => setConfig(previous => ({ ...previous, aiProvider: 'azure' }))} aria-pressed={config.aiProvider === 'azure'} className={`rounded-lg border px-3 py-2.5 text-left text-xs ${config.aiProvider === 'azure' ? 'border-indigo-400 bg-white font-semibold text-indigo-600' : 'border-slate-200 bg-white text-slate-500 hover:border-indigo-300'}`}>Azure OpenAI</button></div>
+                            <p className="mt-3 text-xs leading-6 text-slate-400">{getSelectedInstance()?.authMode === 'codex-cli' ? 'Codex 使用浏览器登录；模型 ID 须为该账户可用的模型，保存前请测试。' : '选择提供商后填写自己的 API Key 与已开通的模型 ID。兼容预设仅填充示例地址，不能保证所有模型支持拍照；请测试文本与图像能力后保存。'}</p>
                             {config.aiProvider === 'openai' && (() => { const preset = PROVIDER_PRESETS.find(preset => preset.id === getSelectedInstance()?.providerId); return preset ? <p className="mt-2 text-xs leading-6 text-slate-500">{preset.note} <a href={preset.docs} target="_blank" rel="noreferrer" className="text-indigo-500 underline">官方接入文档</a></p> : null; })()}
-                            </details>
                         </div>
                         {loading ? (
                             <div className="flex justify-center py-4">
@@ -1029,7 +1037,7 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
                                         </SelectTrigger>
                                         <SelectContent>
                                             <SelectItem value="gemini">Google Gemini</SelectItem>
-                                            <SelectItem value="openai">OpenAI / Compatible</SelectItem>
+                                            <SelectItem value="openai">OpenAI 兼容服务 · 在上方选择具体厂商</SelectItem>
                                             <SelectItem value="azure">Azure OpenAI</SelectItem>
                                         </SelectContent>
                                     </Select>
@@ -1112,7 +1120,8 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
                                                         className={!getSelectedInstance()?.name?.trim() ? 'border-destructive' : ''}
                                                     />
                                                 </div>
-                                                <div className="space-y-2">
+                                                {getSelectedInstance()?.authMode === 'codex-cli' && <><CodexLoginPanel /><div className="space-y-2"><Label>Codex 模型 ID</Label><Input value={getSelectedInstance()?.model || ''} onChange={event => updateOpenAIInstance('model', event.target.value)} placeholder="gpt-5.3-codex" /></div></>}
+                                                {getSelectedInstance()?.authMode !== 'codex-cli' && <><div className="space-y-2">
                                                     <Label>API Key <span className="text-destructive">*</span></Label>
                                                     <div className="relative">
                                                         <Input
@@ -1153,6 +1162,7 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
                                                     currentModel={getSelectedInstance()?.model}
                                                     onModelChange={(model) => updateOpenAIInstance('model', model)}
                                                 />
+                                                </>}
                                             </div>
                                         )}
                                     </div>
@@ -1339,7 +1349,7 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
                             </div>
                         )}
                         <details className="rounded-xl border border-slate-200 bg-white p-4"><summary className="cursor-pointer text-sm text-slate-600">高级配置 · 厂商、能力与调用记录</summary><div className="mt-4"><ModelTaskPanel /></div></details>
-                        </>}
+                        </div>}
                     </TabsContent>
 
                     {/* Prompts Tab */}

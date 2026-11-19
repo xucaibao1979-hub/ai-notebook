@@ -12,6 +12,7 @@ vi.mock('@/components/ui/back-button', () => ({ BackButton: () => null }));
 vi.mock('@/components/markdown-renderer', () => ({ MarkdownRenderer: ({ content }: { content: string }) => createElement('span', null, content) }));
 import {
     hasPrintedChoiceOptions,
+    getPrintedChoiceLetters,
     getPrintPreviewCountLabel,
     getPrintPreviewEmptyState,
     getSelectedPrintItems,
@@ -43,6 +44,8 @@ describe('print preview helpers', () => {
         expect(hasPrintedChoiceOptions('下列说法正确的是（  ）', '<p>A．第一个选项</p><p>B．第二个选项</p>')).toBe(true);
         expect(hasPrintedChoiceOptions('请列式解答：甲得到 A 元，乙得到 B 元。')).toBe(false);
         expect(hasPrintedChoiceOptions('解题步骤：A. 列式计算，然后检验')).toBe(false);
+        expect(getPrintedChoiceLetters('Choose the best answer: (A) cat (B) dog (C) bird (D) fish')).toEqual(['A', 'B', 'C', 'D']);
+        expect(getPrintedChoiceLetters('Choose one: A: yes B: no C: maybe D: other')).toEqual(['A', 'B', 'C', 'D']);
     });
 
     it('局部选择时显示已选数量和总数量', () => {
@@ -128,6 +131,8 @@ describe('旧打印预览的学生卷', () => {
             await act(async () => { root.render(createElement(PrintStudyPage)); });
             const articles = container.querySelectorAll('article');
             expect(articles).toHaveLength(2);
+            expect(container.querySelector('.print-study-sheet')).not.toBeNull();
+            expect(articles[0].classList.contains('break-inside-avoid')).toBe(false);
             expect(articles[0].textContent).toContain('计算结果正确的是');
             expect(articles[0].querySelector('[aria-label*="作答区"]')).toBeNull();
             expect(articles[1].querySelector('[aria-label="第 2 题作答区"]')).not.toBeNull();

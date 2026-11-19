@@ -106,7 +106,7 @@ export default function NotebooksPage() {
                         </p>
                     </div>
                     <div className="flex w-full items-center gap-2 sm:w-auto sm:shrink-0">
-                        <Link href="/notebooks/network-bank" className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-indigo-700 hover:bg-indigo-50"><Globe2 className="mr-1 size-4" />网络题库</Link>
+                        <Link href="/notebooks/network-bank" className="inline-flex h-9 items-center rounded-md border border-slate-200 bg-white px-3 text-sm font-medium text-indigo-700 hover:bg-indigo-50"><Globe2 className="mr-1 size-4" />网络题库 · 查看数量</Link>
                         <Link href="/capture"><Button size="sm" className="bg-indigo-600 hover:bg-indigo-700"><Plus className="mr-1 size-4" />录入错题</Button></Link>
                         <Button onClick={() => setDialogOpen(true)} variant="outline" size="sm" className="hidden sm:flex">
                             <Plus className="mr-2 h-4 w-4" />
@@ -119,7 +119,7 @@ export default function NotebooksPage() {
                 </div>
 
                 <section className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-indigo-100 bg-gradient-to-r from-indigo-50 via-white to-white p-5 sm:p-6" aria-label="错题学习概况">
-                    <div className="flex items-center gap-4"><span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white"><BookOpenCheck className="size-5" /></span><div><p className="text-sm font-semibold text-slate-900">继续整理，巩固薄弱点</p><p className="mt-1 text-xs text-slate-500">{notebooks.length} 个科目错题本 · 已收录 {totalErrors} 道错题</p></div></div>
+                    <div className="flex items-center gap-4"><span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white"><BookOpenCheck className="size-5" /></span><div><p className="text-sm font-semibold text-slate-900">继续整理，巩固薄弱点</p><p className="mt-1 text-xs text-slate-500">我的错题本 {notebooks.length} 本 · 可见错题 {totalErrors} 道</p></div></div>
                     {nextNotebook ? <Link href={`/notebooks/${nextNotebook.id}`} className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">复习{nextNotebook.name} · {nextNotebook.progress?.pending} 道待复习<ArrowRight className="size-4" /></Link> : <Link href="/capture" className="inline-flex min-h-10 items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700">录入第一道错题<ArrowRight className="size-4" /></Link>}
                 </section>
 

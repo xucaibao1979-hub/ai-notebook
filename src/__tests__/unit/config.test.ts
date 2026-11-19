@@ -36,6 +36,15 @@ describe('config module', () => {
     });
 
     describe('getAppConfig', () => {
+        it('从父目录启动服务时仍读取项目内保存的模型配置', async () => {
+            const parent = path.resolve('D:/资料新/项目/开源错题本');
+            vi.spyOn(process, 'cwd').mockReturnValue(parent);
+            vi.mocked(fs.existsSync).mockImplementation(file => String(file).endsWith(path.join('wrong-notebook-main', 'package.json')) || String(file).endsWith(path.join('config', 'app-config.json')));
+            vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({aiProvider: 'openai', openai: {instances: [{id: 'saved', name: '此前保存的模型', model: 'saved-model', apiKey: 'key', baseUrl: 'https://api.openai.com/v1'}]}}));
+            const {getAppConfig} = await import('@/lib/config');
+            expect(getAppConfig().openai?.instances?.[0]?.model).toBe('saved-model');
+            expect(fs.readFileSync).toHaveBeenCalledWith(path.join(parent, 'wrong-notebook-main', 'config', 'app-config.json'), 'utf-8');
+        });
         it('应该返回默认配置（文件不存在时）', async () => {
             vi.mocked(fs.existsSync).mockReturnValue(false);
 

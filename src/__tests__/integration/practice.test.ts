@@ -8,6 +8,8 @@ vi.mock('@/lib/error-solution',()=>({prepareErrorSolution:vi.fn(async()=>({answe
 // Use vi.hoisted to ensure mocks are initialized before module imports
 const mocks = vi.hoisted(() => ({
     mockSetCreate: vi.fn(),
+    mockSetFindMany: vi.fn(),
+    mockErrorFindMany: vi.fn(),
     mockUser:vi.fn(),
     mockPrismaErrorItem: {
         findFirst: vi.fn(),
@@ -33,8 +35,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/prisma', () => ({
     prisma: {
         user:{findUnique:mocks.mockUser},
-        learningSet: {create:mocks.mockSetCreate},
-        errorItem: mocks.mockPrismaErrorItem,
+        learningSet: {create:mocks.mockSetCreate,findMany:mocks.mockSetFindMany},
+        errorItem: {...mocks.mockPrismaErrorItem,findMany:mocks.mockErrorFindMany},
         practiceRecord: mocks.mockPrismaPracticeRecord,
     },
 }));
@@ -62,6 +64,8 @@ describe('/api/practice', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mocks.mockUser.mockResolvedValue(null);
+        mocks.mockSetFindMany.mockResolvedValue([]);
+        mocks.mockErrorFindMany.mockResolvedValue([]);
         mocks.mockAIService.reanswerQuestion.mockResolvedValue({answerText:'{"valid":true,"reason":"审核通过"}'});
         mocks.mockSetCreate.mockResolvedValue({id:'saved',createdAt:new Date('2026-10-09T12:00:00Z')});
         vi.mocked(getServerSession).mockResolvedValue(mocks.mockSession);
@@ -106,6 +110,15 @@ describe('/api/practice', () => {
             expect(mocks.mockSetCreate.mock.calls[0][0].data.userId).toBe('user-123');
         });
 
+        it('历史题反复出现时拒绝保存', async () => {
+            mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(mockErrorItem);
+            mocks.mockErrorFindMany.mockResolvedValue([{questionText:'求解 x + 2 = 5'}]);
+            mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({questionText:'求解 x + 2 = 5',answerText:'3',analysis:'解析'});
+            const response=await GENERATE_POST(new Request('http://localhost/api/practice/generate',{method:'POST',body:JSON.stringify({errorItemId:'error-item-1',language:'zh'})}));
+            expect(response.status).toBe(409);
+            expect(mocks.mockSetCreate).not.toHaveBeenCalled();
+            expect(mocks.mockAIService.generateSimilarQuestion).toHaveBeenCalledTimes(3);
+        });
         it('应该支持不同难度级别', async () => {
             mocks.mockPrismaErrorItem.findFirst.mockResolvedValue(mockErrorItem);
             mocks.mockAIService.generateSimilarQuestion.mockResolvedValue({

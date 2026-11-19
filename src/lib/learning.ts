@@ -16,6 +16,7 @@ export const learningRequestSchema = z.object({
     publisher: z.string().trim().max(100).optional(),
     volume: z.string().trim().max(30).optional(),
     notebookId: z.string().max(100).optional(),
+    refreshId: z.string().uuid().optional(),
     prompt: z.string().trim().max(2000).default(''),
     knowledgePoint: z.string().trim().max(300).default(''),
     grade: z.string().trim().max(80).default(''),

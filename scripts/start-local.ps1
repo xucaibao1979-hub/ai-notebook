@@ -1,4 +1,4 @@
-param([int]$Port = 3001, [switch]$Background)
+param([int]$Port = 3001, [switch]$Background, [string]$HostAddress = '0.0.0.0')
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
@@ -25,9 +25,9 @@ if ($Background) {
     $previewRoot = (Get-Location).Path
     $previewLogs = Join-Path $previewRoot 'data/previews'
     New-Item -ItemType Directory -Force -Path $previewLogs | Out-Null
-    Start-Process -FilePath $previewNodePath -ArgumentList @('node_modules/next/dist/bin/next', $previewMode, '-H', '127.0.0.1', '-p', "$Port") -WorkingDirectory $previewRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $previewLogs 'local-server.log') -RedirectStandardError (Join-Path $previewLogs 'local-server-error.log') | Out-Null
-    Write-Output "Preview started: http://localhost:$Port/"
+    Start-Process -FilePath $previewNodePath -ArgumentList @('node_modules/next/dist/bin/next', $previewMode, '-H', $HostAddress, '-p', "$Port") -WorkingDirectory $previewRoot -WindowStyle Hidden -RedirectStandardOutput (Join-Path $previewLogs 'local-server.log') -RedirectStandardError (Join-Path $previewLogs 'local-server-error.log') | Out-Null
+    Write-Output "Preview started on ${HostAddress}:$Port (local: http://localhost:$Port/)"
     exit 0
 }
-& $previewNodePath node_modules/next/dist/bin/next $previewMode -H 127.0.0.1 -p $Port
+& $previewNodePath node_modules/next/dist/bin/next $previewMode -H $HostAddress -p $Port
 exit $LASTEXITCODE

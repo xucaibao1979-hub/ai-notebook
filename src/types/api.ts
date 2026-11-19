@@ -119,6 +119,7 @@ export interface OpenAIInstance {
     model: string;
     providerId?: string;
     apiMode?: 'chat' | 'responses';
+    authMode?: 'codex-cli';
 }
 
 export interface AppConfig {

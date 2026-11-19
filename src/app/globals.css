@@ -153,6 +153,14 @@
     display: none !important;
   }
 
+  /* Allow long questions to flow across pages instead of pushing a whole card to the next sheet. */
+  .print-study-sheet { display: block; font-size: 10.5pt; line-height: 1.45; }
+  .print-study-sheet .library-question-content { line-height: 1.45; }
+  .print-study-sheet .library-question-content p { margin: 0.2rem 0; }
+  .print-study-sheet article { break-inside: auto; page-break-inside: auto; }
+  .print-study-sheet article h3, .print-study-sheet article h4 { break-after: avoid; page-break-after: avoid; }
+  .print-study-sheet article figure, .print-study-sheet article img { break-inside: avoid; page-break-inside: avoid; }
+
   /* Prevent page breaks inside elements */
   .print\:break-inside-avoid {
     break-inside: avoid;

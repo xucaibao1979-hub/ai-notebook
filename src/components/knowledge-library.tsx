@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
-import { Library, BookOpen, Search, Eye, EyeOff, ArrowLeft, ArrowRight, ExternalLink, Download, Loader2, RefreshCw, FileText, ChevronDown, NotebookTabs, History } from 'lucide-react';
+import { Library, BookOpen, Search, Eye, EyeOff, ArrowLeft, ArrowRight, ExternalLink, Download, RefreshCw, FileText, ChevronDown, NotebookTabs, History } from 'lucide-react';
 import { apiClient, friendlyApiError } from '@/lib/api-client';
 import { EXAM_SUBJECTS, GRADE_LABELS, RECENT_EXAM_YEARS, LibraryPaper } from '@/lib/knowledge-library';
 import { Button } from '@/components/ui/button';
@@ -14,10 +14,12 @@ import { LibraryHtml } from '@/components/library-html';
 import { PaperPracticeTools } from '@/components/paper-practice-tools';
 import { PaperErrorTransfer } from '@/components/paper-error-transfer';
 import { KnowledgeNavigation } from '@/components/knowledge-navigation';
+import Link from 'next/link';
+import { KnowledgeSourceUpdates } from '@/components/knowledge-source-updates';
 
 type Catalog = { sources?:{name:string;count:number}[]; papers: LibraryPaper[]; total: number; page: number; pageSize: number; regions: string[]; subjects: { subject: string; count: number }[]; years: { year: number; examType: string; count: number }[]; summary: { papers: number; questions: number; answers: number; errors: number; historyExercises: number }; coverage: string };
 type Attempt = { id: string; paperId: string; answers: Record<string,string>; completed: boolean; durationSeconds:number; updatedAt: string; paper?: {title:string;subject:string;year:number} };
-type SyncStatus = { state: string; discovered: number; processed: number; imported: number; failed: number; errors?: { url: string; message: string }[] };
+type SyncStatus = { state: string; discovered: number; processed: number; imported: number; failed: number; resumed?: number; retryAt?: string; errors?: { url: string; message: string }[] };
 const selectClass = 'h-10 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-8 text-sm text-slate-600 outline-none focus:ring-2 focus:ring-indigo-100';
 
 function Filter({ label, children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { label: string }) {
@@ -25,10 +27,13 @@ function Filter({ label, children, ...props }: React.SelectHTMLAttributes<HTMLSe
 }
 const errorMessage = friendlyApiError;
 
+
 export function KnowledgeLibrary() {
     const { data: session } = useSession();
     const [catalog, setCatalog] = useState<Catalog | null>(null);
     const [syncStatus, setSyncStatus] = useState<SyncStatus | null>(null);
+    const [otherSyncStatus, setOtherSyncStatus] = useState<SyncStatus | null>(null);
+    const [cacheSyncStatus, setCacheSyncStatus] = useState<SyncStatus | null>(null);
     const [subject, setSubject] = useState('数学');
     const [year, setYear] = useState('');
     const [source,setSource]=useState('');
@@ -92,7 +97,10 @@ export function KnowledgeLibrary() {
             catch { /* Catalog remains usable if no sync tool is deployed. */ }
         }
         loadProgress();
-        const timer = setInterval(loadProgress, 10000);
+        const loadOtherProgress = async () => { try { const status = await apiClient.get<SyncStatus>('/api/knowledge-library/sync?source=other'); if (active) setOtherSyncStatus(status); } catch { /* Other sources are optional. */ } };
+        const loadCacheProgress = async () => { try { const status = await apiClient.get<SyncStatus>('/api/knowledge-library/sync?source=cache'); if (active) setCacheSyncStatus(status); } catch { /* No local reparse yet. */ } };
+        loadOtherProgress(); loadCacheProgress();
+        const timer = setInterval(() => { loadProgress(); loadOtherProgress(); loadCacheProgress(); }, 10000);
         return () => { active = false; clearInterval(timer); };
     }, []);
     useEffect(() => {
@@ -124,8 +132,25 @@ export function KnowledgeLibrary() {
     }
     async function startSync() {
         setSyncStarting(true); setError('');
-        try { await apiClient.post('/api/knowledge-library/sync', {}); setSyncStatus(previous => ({ state: 'running', discovered: previous?.discovered || 0, processed: 0, imported: 0, failed: 0 })); }
+        try { await apiClient.post('/api/knowledge-library/sync', {}); setSyncStatus(previous => ({ state: 'running', discovered: previous?.discovered || 0, processed: previous?.processed || 0, imported: 0, failed: 0, resumed: previous?.processed || 0 })); apiClient.get<SyncStatus>('/api/knowledge-library/sync').then(setSyncStatus).catch(() => {}); }
         catch (error) { setError(errorMessage(error)); }
+        finally { setSyncStarting(false); }
+    }
+    async function reparseCachedSource() {
+        setSyncStarting(true); setError('');
+        try {
+            await apiClient.post('/api/knowledge-library/sync?source=cache', {});
+            setCacheSyncStatus(previous => ({ state: 'running', discovered: previous?.discovered || 0, processed: previous?.processed || 0, imported: 0, failed: 0 }));
+        } catch (error) { setError(errorMessage(error)); }
+        finally { setSyncStarting(false); }
+    }
+    async function startOtherSync() {
+        setSyncStarting(true); setError('');
+        try {
+            await apiClient.post('/api/knowledge-library/sync?source=other', {});
+            setOtherSyncStatus(previous => ({ state: 'running', discovered: previous?.discovered || 0, processed: previous?.processed || 0, imported: 0, failed: 0 }));
+            apiClient.get<SyncStatus>('/api/knowledge-library/sync?source=other').then(setOtherSyncStatus).catch(() => {});
+        } catch (error) { setError(errorMessage(error)); }
         finally { setSyncStarting(false); }
     }
     async function saveCorrection() {
@@ -146,6 +171,7 @@ export function KnowledgeLibrary() {
     }
     function filterChange(setter: (value: string) => void, value: string) { setter(value); setPage(1); }
     if (paperId) return <main className="mx-auto max-w-6xl space-y-5 p-5 pb-16 md:p-8">
+        <KnowledgeNavigation />
         <Button variant="ghost" onClick={() => { setPaperId(''); setPaper(null); setError(''); }} className="px-0 text-slate-500"><ArrowLeft className="mr-2 size-4" />返回知识库</Button>
         {error && <p role="alert" className="rounded-xl bg-red-50 p-4 text-sm text-red-600">{error}<button className="ml-3 underline" onClick={retryContent}>重新加载</button></p>}
         {!paper && detailLoading ? <p className="p-10 text-center text-slate-400">正在加载试卷…</p> : paper && <>
@@ -184,10 +210,11 @@ export function KnowledgeLibrary() {
     </main>;
     return <main className="mx-auto max-w-6xl space-y-6 p-5 pb-16 md:p-8">
         <KnowledgeNavigation />
-        <header className="flex flex-wrap items-start justify-between gap-4"><div><p className="mb-2 text-xs font-medium tracking-wider text-indigo-500">EXAM LIBRARY</p><h1 className="text-3xl font-semibold text-slate-800">知识库</h1><p className="mt-2 text-sm text-slate-500">中高考公开试卷，支持按科目、年份查询，按年级练习。</p></div><div className="flex gap-2"><Button variant="outline" onClick={loadHistory}>作答历史</Button><Button variant="outline" disabled={loading} onClick={fetchCatalog}><RefreshCw className="mr-2 size-4" />刷新目录</Button>{session?.user.role === 'admin' && <Button disabled={syncStarting || syncStatus?.state === 'running'} onClick={startSync} className="bg-indigo-500 hover:bg-indigo-600">{syncStarting || syncStatus?.state === 'running' ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Download className="mr-2 size-4" />}{syncStatus?.state === 'running' ? '正在同步' : '同步多平台试卷'}</Button>}</div></header>
+        <header className="flex flex-wrap items-start justify-between gap-4"><div><p className="mb-2 text-xs font-medium tracking-wider text-indigo-500">KNOWLEDGE LIBRARY</p><h1 className="text-3xl font-semibold text-slate-800">知识库</h1><p className="mt-2 text-sm text-slate-500">查找试卷、知识点与数学公式，按需要练习和复习。</p></div><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={loadHistory}>作答历史</Button><Button variant="outline" disabled={loading} onClick={fetchCatalog}><RefreshCw className="mr-2 size-4" />刷新目录</Button></div></header>
+        <Link href="/knowledge-library/formulas" className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-indigo-200 bg-indigo-50 p-4 text-sm text-indigo-800 hover:border-indigo-400 sm:p-5"><span><strong className="block text-base">数学公式</strong><span className="mt-1 block text-xs">筛选小学、初中和高中数学公式，指定公式生成举一反三练习。</span></span><span className="font-medium">打开公式库 →</span></Link>
+        <KnowledgeSourceUpdates primary={syncStatus} other={otherSyncStatus} cache={cacheSyncStatus} primarySavedCount={catalog?.sources?.find(item => item.name === '考试卷网 · 公开整理版')?.count || 0} savedCount={catalog?.sources?.filter(item => ['中国教育在线', '高考100', '中考网'].includes(item.name)).reduce((count, item) => count + item.count, 0) || 0} admin={session?.user.role === 'admin'} busy={syncStarting} onPrimary={startSync} onOther={startOtherSync} onCache={reparseCachedSource} />
         {historyVisible && <section className="rounded-2xl border bg-white p-5"><div className="flex justify-between"><h2>作答历史 · 最近 100 次</h2><button onClick={() => setHistoryVisible(false)}>收起</button></div>{history.length ? history.map(record => <button key={record.id} className="mt-3 block w-full rounded-xl bg-slate-50 p-3 text-left text-sm" onClick={() => {openPaper({id:record.paperId} as LibraryPaper);setAttemptId(record.id);setAnswers(record.answers);setDurationSeconds(record.durationSeconds||0);setAttemptCompleted(record.completed);}}>{record.paper?.subject} · {record.paper?.title || '试卷'}<span className="ml-3 text-xs text-slate-500">{record.completed ? '已完成' : '进行中'} · 已填写 {Object.values(record.answers).filter(a=>a.trim()).length} 题 · {new Date(record.updatedAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}</span></button>) : <p className="mt-3 text-sm text-slate-400">暂无作答记录，进入试卷填写并保存即可。</p>}</section>}
         <div className="overflow-x-auto"><section className="grid min-w-[760px] grid-cols-5 gap-3" aria-label="知识库统计">{[{ label: '已收录试卷', value: catalog?.summary.papers, icon: FileText }, { label: '已提取题目', value: catalog?.summary.questions, icon: BookOpen }, { label: '独立答案', value: catalog?.summary.answers, icon: Library }, { label: '错题本', value: catalog?.summary.errors, icon: NotebookTabs }, { label: '历史习题', value: catalog?.summary.historyExercises, icon: History }].map(item => <div key={item.label} className="rounded-2xl border border-slate-200/80 bg-white p-4 sm:p-5"><item.icon className="mb-3 size-5 text-indigo-400" /><p className="text-2xl font-semibold text-slate-800">{item.value?.toLocaleString() || '0'}</p><p className="mt-1 text-xs text-slate-400">{item.label}</p></div>)}</section></div>
-        {syncStatus && syncStatus.state !== 'idle' && <details className="rounded-xl border border-indigo-100 bg-indigo-50/50 p-4 text-xs leading-6 text-slate-600"><summary className="cursor-pointer font-medium text-indigo-700">查看试卷同步状态与缺失说明</summary><p className="mt-2">抓取状态：{syncStatus.state === 'running' ? '进行中' : syncStatus.state === 'completed' ? '当前来源目录处理完成' : syncStatus.state === 'completed_with_errors' ? '目录已处理，有缺失待补充' : syncStatus.state === 'rate_limited' ? '来源限流，已停止' : '部分完成 / 待处理'} · 已处理 {syncStatus.processed} / {syncStatus.discovered} 页 · 本次导入 {syncStatus.imported} 份 · 失败 {syncStatus.failed} 页</p><p className="text-slate-400">公开来源覆盖有限，“目录处理完成”不等于全国所有试卷齐全。可刷新目录查看新导入的内容。</p>{!!syncStatus.errors?.length && <details className="mt-1"><summary className="cursor-pointer text-indigo-500">查看近期缺失与失败原因</summary>{syncStatus.errors.map((item, index) => <p key={index} className="break-all">{item.url}：{item.message}</p>)}</details>}</details>}
         <details className="text-xs leading-6 text-slate-500"><summary className="w-fit cursor-pointer text-indigo-700">查看原卷图片与资料说明</summary><p className="mt-2">逐题内容不完整时，可选择“完整原卷图片”保留全部题图与公式，并在试卷内切换其他来源核对。图片支持放大和原尺寸查看。</p></details>
         <section className="flex flex-col rounded-2xl border border-slate-200/80 bg-white p-5 sm:p-6">
             {showFilters&&<div className="mt-5 space-y-4">

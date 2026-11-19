@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { gzipSync } from 'zlib';
+import { createHash } from 'crypto';
 import { prisma } from './prisma';
 import { createBackup } from './complete-backup';
 import { learningDateKey } from './learning';
@@ -12,6 +13,18 @@ export async function runAutomaticBackup() {
         const date=learningDateKey();
         const folder=path.resolve('data/backups',date);
         await fs.mkdir(folder,{recursive:true});
+        const configBackup=path.join(folder,'system-config.json.gz');
+        if(!await fs.stat(configBackup).catch(()=>null)){
+            const files:Record<string,string>={};
+            for(const relative of ['.env','config/app-config.json']){
+                const contents=await fs.readFile(path.resolve(relative)).catch(()=>null);
+                if(contents)files[relative]=contents.toString('base64');
+            }
+            const payload={kind:'system-config-backup',version:1,createdAt:new Date().toISOString(),files};
+            const sha256=createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+            await fs.writeFile(configBackup+'.tmp',gzipSync(JSON.stringify({...payload,sha256})));
+            await fs.rename(configBackup+'.tmp',configBackup);
+        }
         const snapshot=path.join(folder,'database.sqlite');
         const temporary=path.join(folder,`database-${Date.now()}.sqlite`);
         await prisma.$executeRawUnsafe(`VACUUM INTO '${temporary.replaceAll('\\','/').replaceAll("'","''")}'`);

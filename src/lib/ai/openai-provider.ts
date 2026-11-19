@@ -7,6 +7,7 @@ import { safeParseParsedQuestion, parseAIJson, GeogebraAnalysisSchema } from './
 import { getMathTagsFromDB, getTagsFromDB } from './tag-service';
 import { createLogger } from '../logger';
 import { normalizeMistakeStatusForSave } from '../mistake-status';
+import { codexCompletion } from './codex-cli';
 
 const logger = createLogger('ai:openai');
 
@@ -16,12 +17,13 @@ type OpenAIUserContent = string | Array<
 >;
 
 export class OpenAIProvider implements AIService {
-    private openai: OpenAI;
+    private openai: OpenAI | null;
     private model: string;
     private baseURL: string;
     private apiKey: string;
     private isLongCat: boolean;
     private apiMode: 'chat' | 'responses';
+    private codexWebLogin: boolean;
 
     async translateImage(imageBase64: string, mimeType: string, instructions: string): Promise<string> {
         const response = await this.createCompletion({
@@ -84,12 +86,13 @@ export class OpenAIProvider implements AIService {
         const apiKey = config?.apiKey;
         const baseURL = config?.baseUrl;
 
-        if (!apiKey) {
+        this.codexWebLogin = config?.providerId === 'codex' && config?.authMode === 'codex-cli';
+        if (!apiKey && !this.codexWebLogin) {
             throw new Error("AI_AUTH_ERROR: OPENAI_API_KEY is required for OpenAI provider");
         }
 
-        this.openai = new OpenAI({
-            apiKey: apiKey,
+        this.openai = this.codexWebLogin ? null : new OpenAI({
+            apiKey: apiKey || 'codex-web-login',
             baseURL: baseURL || undefined,
             defaultHeaders: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -98,7 +101,7 @@ export class OpenAIProvider implements AIService {
 
         this.model = config?.model || 'gpt-4o'; // Fallback for safety
         this.baseURL = baseURL || 'https://api.openai.com/v1';
-        this.apiKey = apiKey;
+        this.apiKey = apiKey || '';
         this.isLongCat = this.baseURL.includes('longcat.chat');
         this.apiMode = config?.apiMode || (/codex/i.test(this.model) ? 'responses' : 'chat');
 
@@ -111,7 +114,12 @@ export class OpenAIProvider implements AIService {
     }
 
     private async createCompletion(params: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming, requestOptions?:{timeout:number;maxRetries:number}, translation = false): Promise<OpenAI.Chat.Completions.ChatCompletion> {
-        if (this.apiMode === 'chat'){const result=await this.openai.chat.completions.create(params,requestOptions);captureTokenUsage(result.usage?.prompt_tokens,result.usage?.completion_tokens);return result;}
+        if (this.codexWebLogin) {
+            const answer = await codexCompletion(params.messages as Array<{ role: string; content: unknown }>, this.model, requestOptions?.timeout);
+            return { id: 'codex-cli', object: 'chat.completion', created: Math.floor(Date.now() / 1000), model: this.model, choices: [{ index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: answer, refusal: null } }] };
+        }
+        const openai = this.openai!;
+        if (this.apiMode === 'chat'){const result=await openai.chat.completions.create(params,requestOptions);captureTokenUsage(result.usage?.prompt_tokens,result.usage?.completion_tokens);return result;}
         const instructions = params.messages.filter(message => message.role === 'system' || message.role === 'developer')
             .map(message => typeof message.content === 'string' ? message.content : '').join('\n');
         const input: OpenAI.Responses.ResponseInput = params.messages.filter(message => message.role === 'user' || message.role === 'assistant').map(message => {
@@ -123,7 +131,7 @@ export class OpenAIProvider implements AIService {
             }
             return { role: 'user' as const, content };
         });
-        const response = await this.openai.responses.create({ model: this.model, instructions, input, max_output_tokens: translation ? 1024 : Math.max(params.max_tokens || 8192, 16384), store: false },requestOptions);
+        const response = await openai.responses.create({ model: this.model, instructions, input, max_output_tokens: translation ? 1024 : Math.max(params.max_tokens || 8192, 16384), store: false },requestOptions);
         captureTokenUsage(response.usage?.input_tokens,response.usage?.output_tokens);
         if (response.status === 'incomplete' || !response.output_text?.trim()) throw new Error('AI_RESPONSE_ERROR: Responses API did not return a complete answer');
         return { id: response.id, object: 'chat.completion', created: response.created_at, model: response.model, choices: [{ index: 0, finish_reason: 'stop', logprobs: null, message: { role: 'assistant', content: response.output_text, refusal: null } }] };

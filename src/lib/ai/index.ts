@@ -33,14 +33,28 @@ export function getAIService(task?: 'analyze' | 'homework' | 'generate' | 'catal
         service = new GeminiProvider(config.gemini);
     }
     const model = instance?.model || (provider === 'openai' ? getActiveOpenAIConfig()?.model : provider === 'azure' ? config.azure?.deploymentName : config.gemini?.model) || provider;
+    const activeId = instance?.id || config.openai?.activeInstanceId;
+    const backup = config.openai?.instances?.find(item => item.id === config.backupInstanceId && item.id !== activeId && (item.apiKey?.trim() || item.authMode === 'codex-cli'));
     return new Proxy(service, { get(target, property) {
         const value = Reflect.get(target, property);
         if(property==='constructor'||typeof value !== 'function') return value;
         return async (...args:unknown[]) => {
-            const started = Date.now(); let success=false; let errorReason:string|undefined;const tokens:TokenUsage={};
-            try { const result = await usageContext.run(tokens,()=>Reflect.apply(value, target, args)); success=true; return result; }
+            const started = Date.now(); let success=false; let errorReason:string|undefined; let usedModel=model;const tokens:TokenUsage={};
+            try {
+                try { const result = await usageContext.run(tokens,()=>Reflect.apply(value, target, args)); success=true; return result; }
+                catch (primaryError) {
+                    if (!backup || !(primaryError instanceof Error) || !/AI_NOT_FOUND|model_not_found/i.test(primaryError.message)) throw primaryError;
+                    logger.warn({ primaryModel: model, backupModel: backup.model }, 'Primary model unavailable; trying configured backup');
+                    const backupService = new OpenAIProvider(backup);
+                    const backupMethod = Reflect.get(backupService, property);
+                    if (typeof backupMethod !== 'function') throw primaryError;
+                    usedModel=backup.model;
+                    const result = await usageContext.run(tokens,()=>Reflect.apply(backupMethod, backupService, args));
+                    success=true; return result;
+                }
+            }
             catch(error) { errorReason=modelErrorMessage(error); throw error; }
-            finally { if(userId) try { await prisma.aIUsage.create({data:{userId,task:task || String(property),model,durationMs:Date.now()-started,success,errorReason,...tokens}}); } catch { /* Metrics must not interrupt learning. */ } }
+            finally { if(userId) try { await prisma.aIUsage.create({data:{userId,task:task || String(property),model:usedModel,durationMs:Date.now()-started,success,errorReason,...tokens}}); } catch { /* Metrics must not interrupt learning. */ } }
         };
     } });
 }

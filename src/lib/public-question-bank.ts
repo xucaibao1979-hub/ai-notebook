@@ -1,7 +1,42 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { fetch as remoteFetch, Agent, ProxyAgent } from 'undici';
-import { LearningExercise } from './learning';
+import { LearningExercise, shuffleQuestions } from './learning';
+
+export function questionKey(text: string): string {
+    return text.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+}
+
+export function rotateQuestionTypes<T>(items: T[], typeOf: (item: T) => string): T[] {
+    const buckets = new Map<string, T[]>();
+    for (const item of shuffleQuestions(items)) {
+        const type = typeOf(item);
+        buckets.set(type, [...(buckets.get(type) || []), item]);
+    }
+    const result: T[] = [];
+    while ([...buckets.values()].some(bucket => bucket.length)) {
+        for (const bucket of shuffleQuestions([...buckets.values()])) {
+            const next = bucket.shift();
+            if (next !== undefined) result.push(next);
+        }
+    }
+    return result;
+}
+
+export async function usedQuestionKeys(userId: string): Promise<Set<string>> {
+    const { prisma } = await import('./prisma');
+    const [sets, errors] = await Promise.all([
+        prisma.learningSet.findMany({ where: { userId }, select: { questions: true } }),
+        prisma.errorItem.findMany({ where: { userId, questionText: { not: null } }, select: { questionText: true } }),
+    ]);
+    const keys = new Set(errors.map(item => questionKey(item.questionText || '')));
+    for (const set of sets) {
+        const questions = JSON.parse(set.questions) as { questionText?: string }[];
+        for (const question of questions) if (question.questionText) keys.add(questionKey(question.questionText));
+    }
+    keys.delete('');
+    return keys;
+}
 
 export const PUBLIC_BANKS: Record<string, { file: string; grade: string }> = {
     '数学': { file: 'high_school_mathematics', grade: '高中' },
@@ -92,7 +127,7 @@ export async function loadPublicQuestions(subject: string): Promise<LearningExer
         // A valid local copy is enough for a random reference sample. Waiting for
         // a remote refresh here made a daily recommendation take up to 24 seconds.
         const questions = parseBank(subject, cached);
-        if (questions.length) return questions;
+        if (questions.length) return shuffleQuestions(questions);
     } catch { /* Fetch initial data when no cache exists. */ }
     const url = subject === '英语'
         ? 'https://raw.githubusercontent.com/google/BIG-bench/main/bigbench/benchmark_tasks/english_proverbs/task.json'
@@ -103,11 +138,11 @@ export async function loadPublicQuestions(subject: string): Promise<LearningExer
         if (!questions.length) throw new Error('公开题库暂时没有可用的题目');
         await fs.mkdir(CACHE_DIRECTORY, { recursive: true });
         await fs.writeFile(cacheFile, text, 'utf8');
-        return questions;
+        return shuffleQuestions(questions);
     } catch (error) {
         if (cached) {
             const questions = parseBank(subject, cached);
-            if (questions.length) return questions;
+            if (questions.length) return shuffleQuestions(questions);
         }
         throw error;
     }

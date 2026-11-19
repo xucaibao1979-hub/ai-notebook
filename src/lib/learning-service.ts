@@ -3,7 +3,7 @@ import { createHash } from 'crypto';
 import { prisma } from './prisma';
 import { getAIService } from './ai';
 import { LEARNING_SUBJECTS, LearningExercise, LearningRequest, buildLearningBrief, learningDateKey, shuffleQuestions } from './learning';
-import { loadPublicQuestions } from './public-question-bank';
+import { loadPublicQuestions, questionKey, rotateQuestionTypes, usedQuestionKeys } from './public-question-bank';
 import { currentStudentGrade, STUDENT_GRADES } from './student-grade';
 import { usableForRecommendation } from './paper-quality';
 import { curriculumBrief, curriculumSubject, curriculumSummary, studyPreferences } from './study-preferences';
@@ -58,8 +58,10 @@ async function generateDailyExercises(userId:string,request:LearningRequest,grad
         if(studentGrade>=10&&references.length<3){
             try{references=[...references,...(await loadPublicQuestions(subject)).filter(q=>q.subject===subject&&!structuralIssues({questionText:q.questionText,answerText:q.answerText,analysis:q.analysis||'公开题库'}).length)];}catch{/* 无题库时仍可按课程知识点原创。 */}
         }
-        references=shuffleQuestions(references).filter((q,index,list)=>list.findIndex(item=>item.questionText.trim()===q.questionText.trim())===index).slice(0,3);
+        references=rotateQuestionTypes(references,q=>q.options?.length?'选择题':/填空|_{2,}|（\s*）/.test(q.questionText)?'填空题':/阅读|材料/.test(q.questionText)?'阅读理解':/计算|求解|解方程/.test(q.questionText)?'计算题':'解答题/其他').filter((q,index,list)=>list.findIndex(item=>questionKey(item.questionText)===questionKey(q.questionText))===index).slice(0,Math.max(3,request.count));
     }
+    const used = await usedQuestionKeys(userId);
+    references = references.filter(q => !used.has(questionKey(q.questionText)));
     let ai;
     try{ai=getAIService('generate',userId);}catch{throw new LearningError('请先在设置中启用出题模型。',422);}
     let completed=0;
@@ -68,7 +70,8 @@ async function generateDailyExercises(userId:string,request:LearningRequest,grad
         const original=notebookItems.length?notebookItems[index%notebookItems.length]:null;
         const subject=request.subject!;
         const focus=original?null:focuses.length?focuses[index%focuses.length]:null;
-        const selectedReferences=focus?shuffleQuestions(references.filter(q=>q.knowledgePoints.includes(focus.point))).slice(0,3):references;
+        const matching=focus?references.filter(q=>q.knowledgePoints.includes(focus.point)):references;
+        const selectedReferences=matching.length?Array.from({length:Math.min(3,matching.length)},(_,offset)=>matching[(index+offset)%matching.length]):[];
         const tags=original?original.tags.map(tag=>tag.name).filter(Boolean):focus?[focus.point]:selectedReferences.flatMap(q=>q.knowledgePoints).filter(Boolean).slice(0,5);
         const topic=tags.length?tags.join('、'):original?`从这道错题概括知识点：${original.questionText?.slice(0,300)}`:`${grade||'当前年级'}${subject}课程范围内随机选择通用课程知识点`;
         const variation=shuffleQuestions(['基础巩固','概念辨析','条件变化','生活情境应用','综合推理'])[index%5];
@@ -78,6 +81,7 @@ async function generateDailyExercises(userId:string,request:LearningRequest,grad
         for(let attempt=0;attempt<2;attempt++)try{
             const generated=await ai.generateSimilarQuestion(brief,[subject,...tags].slice(0,5),'zh',request.difficulty,grade||original?.gradeSemester);
             const exercise:LearningExercise={questionText:generated.questionText,answerText:generated.answerText,analysis:generated.analysis,subject,knowledgePoints:generated.knowledgePoints?.length?generated.knowledgePoints:tags,difficulty:request.difficulty,provenance:original?{name:`错题知识点 · ${topic.slice(0,50)}`,url:`/error-items/${original.id}`,originalId:original.id,grade:grade||undefined}:{name:selectedReferences.length?'年级匹配公开题参考 · AI 原创':'年级通用课程知识点 · AI 原创',grade:grade||undefined},referenceSources:focus?.paperCount && focus.paperCount>=2?focus.sources:selectedReferences.length?selectedReferences.map(q=>({name:q.provenance?.name||'公开题库',url:q.provenance?.url})):undefined,recommendationReason:original?'根据错题本知识点随机生成':focus?.paperCount && focus.paperCount>=2?`已收录同学段试卷 ${focus.paperCount} 份均涉及「${focus.point}」${focus.errorScore?' · 本学科错题需巩固':''}`:focus?.errorScore?`本学科错题知识点「${focus.point}」需巩固（非历史高频统计）`:selectedReferences.length?'年级匹配的公开题仅供普通参考（非历史高频统计）':'按当前年级通用课程知识点原创（无试卷高频证据）'};
+            if (!generated.questionText?.trim() || !generated.answerText?.trim() || !generated.analysis?.trim() || used.has(questionKey(generated.questionText))) throw new LearningError('生成题目与历史内容重复或不完整，请重试', 409);
             exercise.provenance.curriculum=curriculumSummary(userPreferences,subject);
             exercise.validation=await validateExercise(exercise,grade||'当前年级',curriculumBrief(userPreferences,subject,grade),userId);
             progress?.(`已完成 ${++completed}/${request.count} 题`);
@@ -87,8 +91,10 @@ async function generateDailyExercises(userId:string,request:LearningRequest,grad
     });
     const settled=await Promise.allSettled(work);
     const results=settled.flatMap(result=>result.status==='fulfilled'?[result.value]:[]);
-    if(!results.length){const first=settled.find(result=>result.status==='rejected');throw new LearningError('没有题目通过生成与质量校验：'+(first?.status==='rejected'&&first.reason instanceof Error?first.reason.message:'请重试'),502);}
-    return results.filter((q,index)=>results.findIndex(other=>other.questionText.trim()===q.questionText.trim())===index);
+    if(!results.length){const first=settled.find(result=>result.status==='rejected');throw new LearningError('没有题目通过生成与质量校验：'+(first?.status==='rejected'&&first.reason instanceof Error?first.reason.message:'请重试'),first?.status==='rejected'&&first.reason instanceof LearningError&&first.reason.status===409?409:502);}
+    const unique=results.filter((q,index)=>results.findIndex(other=>questionKey(other.questionText)===questionKey(q.questionText))===index);
+    if(unique.length<request.count)throw new LearningError(`仅生成 ${unique.length}/${request.count} 道不重复的题目，请调整条件后重试`,409);
+    return unique;
 }
 
 const pendingDailySets = new Map<string, Promise<Awaited<ReturnType<typeof createLearningSet>>>>();
@@ -116,6 +122,7 @@ export async function generateExercises(userId: string, request: LearningRequest
     const savedEvidence = requestedUnits.length ? await prisma.textbookEvidence.findMany({ where: { userId, unitId: { in: requestedUnits.map(unit => unit.id) } }, orderBy: { createdAt: 'desc' } }) : [];
     const unitFocuses = requestedUnit ? shuffleQuestions(request.unitMode === 'review' && requestedUnit.entries.some(entry => !entry.mastered) ? requestedUnit.entries.filter(entry => !entry.mastered) : requestedUnit.entries.length ? requestedUnit.entries : requestedUnit.lessons.map(lesson => ({ kind: '知识点' as const, term: lesson.title, meaning: '目录课目主题，未提供课文原文', mastered: false }))) : [];
 
+    const used = await usedQuestionKeys(userId);
     let originals: { masteryLevel:number;createdAt:Date;reviewSchedules:{scheduledFor:Date;completedAt:Date|null;isCorrect:boolean|null}[]; id: string; questionText: string | null; gradeSemester: string | null; subject: { name: string } | null; tags: { name: string }[] }[] = [];
     let historyQuestions:LearningExercise[]=[];
     let paperTitle = '';
@@ -184,8 +191,8 @@ export async function generateExercises(userId: string, request: LearningRequest
         if (!generated.questionText?.trim() || !generated.answerText?.trim() || !generated.analysis?.trim()) {
             throw new LearningError('AI 返回的题目不完整，请重新生成', 502);
         }
-        if (original && generated.questionText.trim() === original.questionText?.trim()) {
-            throw new LearningError('AI 未生成新的变式题，请重新生成', 502);
+        if (used.has(questionKey(generated.questionText)) || results.some(q=>questionKey(q.questionText)===questionKey(generated.questionText))) {
+            throw new LearningError('生成题目与历史内容重复，请重新生成', 409);
         }
         const exercise:LearningExercise = {
             questionText: generated.questionText, answerText: generated.answerText, analysis: generated.analysis,
@@ -203,12 +210,12 @@ export async function generateExercises(userId: string, request: LearningRequest
         progress?.(`校验第 ${index+1}/${request.count} 题`);
         exercise.validation=await validateExercise(exercise,grade||'当前年级',curriculum,userId);
         if(original)exercise.recommendationReason=recommendationScore(original).reason;
-        if(results.some(q=>q.questionText.trim()===exercise.questionText.trim()))throw new Error('题目重复');
         results.push(exercise);break;
        }catch(e){if(e instanceof Error&&/AI_AUTH_ERROR|AI_QUOTA_EXCEEDED|AI_NOT_FOUND|AI_PERMISSION_DENIED/.test(e.message)){if(!results.length)throw new LearningError(modelErrorMessage(e),422);return results;}if(attempt===1)failures.push(e instanceof Error&&/AI_[A-Z_]+|fetch failed|timeout/i.test(e.message)?modelErrorMessage(e):e instanceof Error?e.message:'生成失败');}
       }
     }
     if(!results.length)throw new LearningError('没有题目通过生成与质量校验：'+failures.join('；').slice(0,300),502);
+    if(results.length<request.count)throw new LearningError(`仅生成 ${results.length}/${request.count} 道不重复的题目：${failures.join('；').slice(0,200)}`,409);
     return results;
 }
 

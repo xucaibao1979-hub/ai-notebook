@@ -5,7 +5,8 @@ export interface ProviderPreset {
 // Addresses and example model IDs are editable; account/region availability is checked by the connection test.
 export const PROVIDER_PRESETS: ProviderPreset[] = [
     { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o', apiMode: 'chat', docs: 'https://developers.openai.com/api/docs/models' },
-    { id: 'codex', name: 'OpenAI Codex', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.3-codex', apiMode: 'responses', docs: 'https://developers.openai.com/api/docs/models/gpt-5.3-codex', note: '通过 Responses API 调用 Codex 模型。需 OpenAI API 密钥，不能使用 Codex 应用的登录凭据。' },
+    { id: 'anthropic', name: 'Anthropic · Claude', baseUrl: 'https://api.anthropic.com/v1', model: '', apiMode: 'chat', docs: 'https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk', note: '使用 Claude API Key 和已开通的 Claude 模型 ID。官方 OpenAI 兼容接口主要用于模型测试与比较，不保证完整生产功能；正式使用前请测试文本和拍照能力。' },
+    { id: 'codex', name: 'OpenAI Codex', baseUrl: 'https://api.openai.com/v1', model: 'gpt-5.3-codex', apiMode: 'responses', docs: 'https://developers.openai.com/codex/auth', note: '使用 Codex CLI 的 ChatGPT 网页登录，本站单独保存登录状态，无需 API Key。需要在本机安装 Codex CLI。' },
     { id: 'alibaba', name: '阿里 · 通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus', apiMode: 'chat', docs: 'https://help.aliyun.com/zh/model-studio/first-api-call-to-qwen', note: '请使用百炼控制台对应地域和业务空间的地址；新版业务空间可能使用专属域名。' },
     { id: 'baidu', name: '百度 · 文心千帆', baseUrl: 'https://qianfan.baidubce.com/v2', model: '', apiMode: 'chat', docs: 'https://cloud.baidu.com/doc/qianfan-docs/s/Fm9l6ocai', note: '填入千帆控制台已开通的文心模型 ID，或通过模型列表选择。' },
     { id: 'tencent', name: '腾讯 · 混元', baseUrl: 'https://api.hunyuan.cloud.tencent.com/v1', model: 'hunyuan-turbos-latest', apiMode: 'chat', docs: 'https://cloud.tencent.cn/document/product/1729/111007', note: '此预设为原混元兼容域名。新账号请按 TokenHub 控制台修改服务地址和模型 ID。' },

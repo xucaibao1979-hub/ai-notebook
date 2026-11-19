@@ -40,6 +40,7 @@ export interface AIConfig {
     model?: string;
     apiMode?: 'chat' | 'responses';
     providerId?: string;
+    authMode?: 'codex-cli';
     // Azure OpenAI 特有字段
     azureDeployment?: string;   // Azure 部署名称
     azureApiVersion?: string;   // API 版本 (如 2024-02-15-preview)

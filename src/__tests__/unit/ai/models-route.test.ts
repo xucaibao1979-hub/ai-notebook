@@ -69,6 +69,14 @@ describe('POST /api/ai/models', () => {
         expect(mockFetch.mock.calls[0][0]).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1/models');
     });
 
+    it('Claude 预设使用官方兼容地址获取模型列表', async () => {
+        mockFetch.mockResolvedValueOnce(upstream({ data: [{ id: 'claude-sonnet' }] }));
+        const response = await POST(makeRequest({ provider: 'openai', apiKey: 'claude-secret', baseUrl: 'https://api.anthropic.com/v1' }));
+        expect(response.status).toBe(200);
+        expect((await response.json()).models[0].id).toBe('claude-sonnet');
+        expect(mockFetch.mock.calls[0][0]).toBe('https://api.anthropic.com/v1/models');
+    });
+
     it('Gemini 官方端点使用请求头携带密钥', async () => {
         mockFetch.mockResolvedValueOnce(upstream({ models: [{ name: 'models/gemini-2.0-flash' }] }));
         const response = await POST(makeRequest({ provider: 'gemini', apiKey: 'gemini-secret' }));

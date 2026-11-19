@@ -4,7 +4,15 @@ import { createLogger } from './logger';
 
 const logger = createLogger('config');
 
-const CONFIG_FILE_PATH = path.join(process.cwd(), 'config', 'app-config.json');
+// Next.js can be launched with a project directory while the shell cwd stays at its parent.
+// Resolve the application root before reading or writing persisted model settings.
+const workingDirectory = process.cwd();
+const projectDirectory = fs.existsSync(path.join(workingDirectory, 'package.json'))
+    ? workingDirectory
+    : fs.existsSync(path.join(workingDirectory, 'wrong-notebook-main', 'package.json'))
+        ? path.join(workingDirectory, 'wrong-notebook-main')
+        : workingDirectory;
+const CONFIG_FILE_PATH = path.join(projectDirectory, 'config', 'app-config.json');
 
 // OpenAI 实例配置
 export interface OpenAIInstance {
@@ -15,6 +23,7 @@ export interface OpenAIInstance {
     model: string;
     providerId?: string;
     apiMode?: 'chat' | 'responses';
+    authMode?: 'codex-cli';
 }
 
 export interface AppConfig {
@@ -150,7 +159,7 @@ export function getAppConfig(): AppConfig {
                 ...DEFAULT_CONFIG,
                 ...userConfig,
                 openai: {
-                    instances: openaiConfig?.instances || DEFAULT_CONFIG.openai?.instances || [],
+                    instances: (openaiConfig?.instances || DEFAULT_CONFIG.openai?.instances || []).map((instance: OpenAIInstance) => instance.providerId === 'codex' && !instance.apiKey?.trim() ? { ...instance, authMode: 'codex-cli' as const } : instance),
                     activeInstanceId: openaiConfig?.activeInstanceId ?? DEFAULT_CONFIG.openai?.activeInstanceId,
                 },
                 gemini: { ...DEFAULT_CONFIG.gemini, ...userConfig.gemini },

@@ -49,20 +49,31 @@ export async function GET(req: Request) {
         })));
     }
 
+    const selection = q.get('selection');
+    const selectedKeys = selection?.split(',') || [];
+    if (q.has('selection') && (mode !== 'sets' || !selectedKeys.length || selectedKeys.length > 100 || selectedKeys.some(key => !/^[a-zA-Z0-9_-]+:\d+$/.test(key)))) {
+        return NextResponse.json({ message: '请选择 1 至 100 道有效的历史习题' }, { status: 400 });
+    }
+    const selectedSetIds = [...new Set(selectedKeys.map(key => key.slice(0, key.lastIndexOf(':'))))];
+    if (q.has('indices') && (!q.get('setId') || !/^\d+(,\d+)*$/.test(q.get('indices') || '') || (q.get('indices') || '').split(',').length > 100)) {
+        return NextResponse.json({ message: '请选择有效的已展开题目' }, { status: 400 });
+    }
     const rows = await prisma.learningSet.findMany({
         where: {
             userId: session.user.id, archivedAt: null,
             ...(q.get('setId') ? { id: q.get('setId')! } : {}),
-            ...(ids ? { id: { in: ids } } : {}),
+            ...(selection !== null ? { id: { in: selectedSetIds } } : ids ? { id: { in: ids } } : {}),
         },
         orderBy: { createdAt: 'desc' },
         take: 100,
     });
     return NextResponse.json(rows.flatMap(row => {
         const hidden = new Set<number>(JSON.parse(row.deletedIndices));
+        const selectedIndices = q.get('setId') === row.id && q.has('indices')
+            ? new Set((q.get('indices') || '').split(',').filter(value => /^\d+$/.test(value)).map(Number)) : null;
         return (JSON.parse(row.questions) as LearningExercise[])
             .map((exercise, index) => ({ ...exercise, index }))
-            .filter(exercise => !hidden.has(exercise.index))
+            .filter(exercise => !hidden.has(exercise.index) && (!selectedIndices || selectedIndices.has(exercise.index)) && (selection === null || selectedKeys.includes(row.id + ':' + exercise.index)))
             .map(exercise => ({
                 key: row.id + ':' + exercise.index, title: row.title,
                 questionText: exercise.questionText + (exercise.options ? '\n' + exercise.options.map((option, index) => String.fromCharCode(65 + index) + '. ' + option).join('\n') : ''),

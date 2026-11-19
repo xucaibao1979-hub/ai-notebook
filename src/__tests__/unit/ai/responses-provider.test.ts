@@ -18,7 +18,7 @@ beforeEach(() => {
 
 describe('provider presets and Responses adapter', () => {
     it('includes the requested providers and editable endpoint/model presets', () => {
-        for (const id of ['openai', 'codex', 'alibaba', 'baidu', 'tencent', 'zhipu', 'deepseek', 'volcengine', 'moonshot', 'minimax', 'siliconflow']) expect(PROVIDER_PRESETS.some(preset => preset.id === id)).toBe(true);
+        for (const id of ['openai', 'anthropic', 'codex', 'alibaba', 'baidu', 'tencent', 'zhipu', 'deepseek', 'volcengine', 'moonshot', 'minimax', 'siliconflow']) expect(PROVIDER_PRESETS.some(preset => preset.id === id)).toBe(true);
         expect(PROVIDER_PRESETS.find(preset => preset.id === 'codex')?.apiMode).toBe('responses');
     });
     it('routes Codex text exercises through Responses, preserving instructions and using final output', async () => {

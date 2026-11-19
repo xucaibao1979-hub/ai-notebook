@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 import { Sparkles, GraduationCap, BookOpen, Globe2, ArrowRight, Loader2, Check, ChevronDown, ExternalLink, Eye, Send, CheckCircle2, RotateCcw, Lightbulb, CalendarDays } from 'lucide-react';
 import { apiClient, friendlyApiError } from '@/lib/api-client';
 import { LearningExercise, LearningSetResponse, LearningRequest, learningDateKey } from '@/lib/learning';
@@ -16,7 +17,7 @@ import { ExerciseTools } from '@/components/exercise-tools';
 import { MarkdownRenderer } from '@/components/markdown-renderer';
 import { GradeProfile, currentStudentGrade, STUDENT_GRADES } from '@/lib/student-grade';
 import { UnitLearning } from '@/components/unit-learning';
-import { hasPrintedChoiceOptions } from '@/lib/print-preview';
+import { getPrintedChoiceLetters } from '@/lib/print-preview';
 
 const difficultyOptions = [{ value: 'easy', label: '基础' }, { value: 'medium', label: '适中' }, { value: 'hard', label: '进阶' }, { value: 'harder', label: '挑战' }] as const;
 const selectClass = 'h-11 w-full appearance-none rounded-xl border border-slate-200 bg-white px-3 pr-9 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100';
@@ -29,17 +30,17 @@ function SelectField({ label, id, children, ...props }: React.SelectHTMLAttribut
     return <div className="space-y-2"><label htmlFor={id} className="text-sm font-medium text-slate-600">{label}</label><div className="relative"><select id={id} className={selectClass} {...props}>{children}</select><ChevronDown className="pointer-events-none absolute right-3 top-3.5 size-4 text-slate-400" /></div></div>;
 }
 
-function ExerciseCard({ exercise, index, setId, onChange }: { exercise: LearningExercise; index: number; setId: string; onChange: (exercise: LearningExercise) => void }) {
+export function ExerciseCard({ exercise, index, setId, onChange }: { exercise: LearningExercise; index: number; setId: string; onChange: (exercise: LearningExercise) => void }) {
     const [answer, setAnswer] = useState(exercise.record?.userAnswer || '');
     const [busy, setBusy] = useState('');
     const [error, setError] = useState('');
     const [aiExplanation, setAiExplanation] = useState(false);
-    const revealed = !!exercise.answerText;
-    const inlineChoices = !exercise.options && hasPrintedChoiceOptions(exercise.questionText, exercise.questionHtml);
-    const choiceLetters = inlineChoices
-        ? Array.from(new Set(`${exercise.questionText}\n${(exercise.questionHtml || '').replace(/<\s*br\s*\/?\s*>|<\s*\/\s*(?:p|div|li)\s*>/gi, '\n').replace(/<[^>]*>/g, ' ')}`.match(/(?:^|\s)[A-DＡ-Ｄ]\s*[.．、)）]\s*\S/gm)?.map(choice => choice.trim().charAt(0).replace(/[Ａ-Ｄ]/g, letter => String.fromCharCode(letter.charCodeAt(0) - 65248))) || []))
-        : [];
+    const [answerVisible, setAnswerVisible] = useState(false);
+    const revealed = !!exercise.answerText || !!exercise.answerHtml;
+    const choiceLetters = !exercise.options ? getPrintedChoiceLetters(exercise.questionText, exercise.questionHtml) : [];
+    const inlineChoices = !exercise.options && (choiceLetters.length > 0 || /^[A-DＡ-Ｄ](?:\b|[.．、:：)）])/.test(exercise.correctOption?.trim() || ''));
     const isChoice = !!exercise.options || inlineChoices;
+    const availableLetters = choiceLetters.length ? choiceLetters : ['A', 'B', 'C', 'D'];
     async function manage(remove=false) {
         if(remove && !window.confirm('删除这道练习题？')) return;
         setBusy('manage');setError('');
@@ -50,6 +51,7 @@ function ExerciseCard({ exercise, index, setId, onChange }: { exercise: Learning
         try {
             const result = await apiClient.post<Pick<LearningExercise, 'answerText' | 'answerHtml' | 'analysis' | 'record'> & { aiExplanation?: boolean }>('/api/learning/answer', { setId, index, action, userAnswer: answer, isCorrect }, { timeout: 180000 });
             onChange({ ...exercise, ...result });
+            if (result.answerText || result.answerHtml) setAnswerVisible(true);
             if (result.aiExplanation) setAiExplanation(true);
         } catch (error) { setError(messageFor(error)); }
         finally { setBusy(''); }
@@ -64,14 +66,14 @@ function ExerciseCard({ exercise, index, setId, onChange }: { exercise: Learning
             const letter = String.fromCharCode(65 + optionIndex);
             return <button key={letter} disabled={!!busy || !!exercise.record} onClick={() => setAnswer(letter)} aria-pressed={answer === letter} className={`flex items-start gap-3 rounded-xl border p-3 text-left text-sm transition-colors ${answer === letter ? 'border-indigo-400 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:border-indigo-200'}`}><span className="mt-0.5 font-semibold">{letter}.</span><MarkdownRenderer content={option} /></button>;
         })}</div>}
-        {inlineChoices && <div className="mt-5 flex flex-wrap gap-2" role="group" aria-label="选择答案">{choiceLetters.map(letter => <button key={letter} type="button" disabled={!!busy || !!exercise.record} onClick={() => setAnswer(letter)} aria-pressed={answer === letter} className={`min-h-10 min-w-12 rounded-xl border px-4 text-sm font-semibold transition-colors ${answer === letter ? 'border-indigo-400 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:border-indigo-200'}`}>{letter}</button>)}</div>}
+        {inlineChoices && <div className="mt-5 flex flex-wrap gap-2" role="group" aria-label="选择答案">{availableLetters.map(letter => <button key={letter} type="button" disabled={!!busy || !!exercise.record} onClick={() => setAnswer(letter)} aria-pressed={answer === letter} className={`min-h-10 min-w-12 rounded-xl border px-4 text-sm font-semibold transition-colors ${answer === letter ? 'border-indigo-400 bg-indigo-50 text-indigo-700' : 'border-slate-200 text-slate-600 hover:border-indigo-200'}`}>{letter}</button>)}</div>}
         {!isChoice && <div className="mt-5 space-y-2"><label htmlFor={`answer-${setId}-${index}`} className="text-sm text-slate-500">写下你的答案或解题思路</label><Textarea id={`answer-${setId}-${index}`} placeholder="先独立思考，再对照解析…" value={answer} onChange={e => setAnswer(e.target.value)} disabled={!!busy || !!exercise.record} maxLength={5000} className="min-h-24 rounded-xl border-slate-200" /></div>}
         <div className="mt-4 flex flex-wrap items-center gap-2">
             {!exercise.record && <Button className="rounded-lg bg-indigo-500 hover:bg-indigo-600" onClick={() => act('submit')} disabled={!!busy || !answer.trim()}>{busy === 'submit' ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Send className="mr-2 size-4" />}提交作答</Button>}
-            {!revealed && <Button variant="ghost" disabled={!!busy} onClick={() => act('reveal')} className="text-slate-500"><Eye className="mr-2 size-4" />查看答案</Button>}
+            <Button variant="ghost" disabled={!!busy} onClick={() => revealed ? setAnswerVisible(value => !value) : act('reveal')} className="text-slate-500"><Eye className="mr-2 size-4" />{answerVisible ? '隐藏答案' : '查看答案'}</Button>
         </div>
         {error && <p className="mt-3 text-sm text-red-600" role="alert">{error}</p>}
-        {revealed && <div className="mt-6 space-y-4 rounded-xl bg-slate-50 p-4 sm:p-5">
+        {revealed && answerVisible && <div className="mt-6 space-y-4 rounded-xl bg-slate-50 p-4 sm:p-5">
             <div><h3 className="mb-2 text-sm font-semibold text-slate-700">参考答案</h3>{exercise.answerHtml ? <div className="library-question-content" dangerouslySetInnerHTML={{ __html: exercise.answerHtml }} /> : <MarkdownRenderer content={exercise.answerText || ''} />}</div>
             <div className="border-t border-slate-200 pt-4"><h3 className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-700"><Lightbulb className="size-4 text-amber-500" />{aiExplanation ? 'AI解析' : '解析与易错点'}</h3><MarkdownRenderer content={exercise.analysis || ''} /></div>
             {exercise.options && <Button variant="outline" size="sm" disabled={!!busy} onClick={() => act('explain')}>{busy === 'explain' ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Sparkles className="mr-2 size-4" />}AI解析</Button>}
@@ -94,6 +96,7 @@ function ExerciseCard({ exercise, index, setId, onChange }: { exercise: Learning
 }
 
 export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
+    const { data: session } = useSession();
     const daily = mode === 'daily';
     const autoStarted = useRef(false);
     const [source, setSource] = useState<'notebook' | 'network'>('notebook');
@@ -119,12 +122,40 @@ export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
     const [initialLoading, setInitialLoading] = useState(true);
     const [error, setError] = useState('');
     const [today, setToday] = useState('');
+    const [bankStats, setBankStats] = useState<{ subject: string; papers: number; questions: number } | null>(null);
+    const [bankSync, setBankSync] = useState<{ state: string; processed: number; discovered: number; imported: number } | null>(null);
+    const [bankUpdating, setBankUpdating] = useState(false);
+    const [bankMessage, setBankMessage] = useState('');
     const [recommendedGrade, setRecommendedGrade] = useState('');
     const [gradeProfileLoaded, setGradeProfileLoaded] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
     const [selectedUnitId, setSelectedUnitId] = useState('');
     const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
     const selectedUnitIdRef = useRef('');
+
+    useEffect(() => {
+        if (!daily) return;
+        let active = true;
+        const refresh = () => {
+            apiClient.get<{ subject: string; papers: number; questions: number }>(`/api/learning/network-bank/summary?subject=${encodeURIComponent(subject)}`)
+                .then(result => { if (active) setBankStats(result); }).catch(() => { if (active) setBankStats(null); });
+            apiClient.get<typeof bankSync>('/api/knowledge-library/sync?source=other')
+                .then(result => { if (active) setBankSync(result); }).catch(() => {});
+        };
+        refresh();
+        const timer = window.setInterval(refresh, 10000);
+        return () => { active = false; window.clearInterval(timer); };
+    }, [daily, subject]);
+
+    async function updateBank() {
+        setBankUpdating(true); setBankMessage('');
+        try {
+            await apiClient.post('/api/knowledge-library/sync?source=other', {});
+            setBankSync(previous => ({ state: 'running', processed: previous?.processed || 0, discovered: previous?.discovered || 0, imported: 0 }));
+            setBankMessage('已开始检查其他公开来源；收录数量会在同步后更新。');
+        } catch (cause) { setBankMessage(friendlyApiError(cause)); }
+        finally { setBankUpdating(false); }
+    }
 
     useEffect(() => {
         const syncView = () => {
@@ -162,7 +193,7 @@ export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
             .then(([notebooks, restored]) => {
                 const saved=freshPlan?null:restored;
                 if (!active) return;
-                setNotebooks(notebooks); setSet(saved); setExerciseView(!!saved);
+                setNotebooks(notebooks); setSet(saved); setExerciseView(!!saved && (!daily || !!requestedSet));
                 if (daily && saved?.parameters?.subject && ['语文', '数学', '英语'].includes(saved.parameters.subject)) {
                     setSubject(saved.parameters.subject);
                     if (saved.parameters.source === 'notebook' || saved.parameters.source === 'network') setSource(saved.parameters.source);
@@ -191,7 +222,7 @@ export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
 
     useEffect(() => {
         const pending = pendingLearningTask(mode);
-        if (!pending) return;
+        if (!pending || pending.failed) return;
         let active = true;
         setLoading(true);
         resumeLearningTask(pending.id, mode, stage => { if (active) setProgress(stage); })
@@ -202,13 +233,14 @@ export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
     }, [mode]);
 
     async function generate() {
-        setLoading(true); setError(''); setSet(null);
+        setLoading(true); setError('');
         try {
             const result = await generateWithProgress({
                 mode, source: daily ? source : 'ai', ...(subject ? { subject } : {}), ...(!daily && publisher ? { publisher } : {}),
                 ...(daily && source === 'notebook' && notebookId ? { notebookId } : {}),
                 prompt: daily ? '' : prompt, knowledgePoint: daily ? '' : knowledgePoint,
                 grade: daily ? '' : grade || recommendedGrade, ...(!daily && volume ? { volume } : {}), difficulty: daily && source === 'network' ? 'medium' : difficulty, count,
+                ...(daily ? { refreshId: crypto.randomUUID() } : {}),
             },setProgress);
             setSet(result); setExerciseView(true); setToday(learningDateKey());
             window.history.pushState(null, '', `${daily ? '/daily' : '/ai-practice'}?set=${encodeURIComponent(result.id)}`);
@@ -261,17 +293,18 @@ export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
         const link = document.createElement('a'); link.href = url; link.download = `${set.title.replace(/[\\/:*?"<>|]/g, '-')}.md`; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
     }
     return <main className="mx-auto max-w-6xl space-y-5 p-4 pb-16 sm:p-6 md:p-8">
-        {exerciseView && set && !loading && <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white p-5"><div><p className="text-xs text-indigo-500">已保存的练习</p><h1 className="mt-1 text-xl font-semibold text-slate-800">{set.title}</h1><p className="mt-1 text-xs text-slate-500">可以继续作答、查看解析，也可以稍后从历史练习重新打开。</p></div><div className="flex flex-wrap gap-2"><Button variant="outline" onClick={backToOptions}>返回出题设置</Button><Link href="/knowledge-library/history" className="inline-flex items-center rounded-md border px-4 text-sm text-indigo-600">历史练习</Link></div></div>}
-        {!exerciseView && <>
+        {exerciseView && set && !loading && <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-white p-5"><div><p className="text-xs text-indigo-500">已保存的练习</p><h1 className="mt-1 text-xl font-semibold text-slate-800">{set.title}</h1><p className="mt-1 text-xs text-slate-500">可以继续作答、查看解析，也可以稍后从历史练习重新打开。</p></div><div className="flex flex-wrap gap-2">{daily && <Button onClick={generate}>重新获取今日推荐</Button>}<Button variant="outline" onClick={backToOptions}>返回出题设置</Button><Link href="/knowledge-library/history" className="inline-flex items-center rounded-md border px-4 text-sm text-indigo-600">历史练习</Link></div></div>}
+        {(!exerciseView || daily && loading) && <>
         <header className="flex flex-wrap items-start justify-between gap-4">
             <div><h1 className="text-2xl font-semibold tracking-tight text-slate-900 sm:text-3xl">{daily ? '每日推荐' : 'AI练习'}</h1><p className="mt-2 text-sm leading-6 text-slate-500">{daily ? '每天一组好题，把薄弱点练成你的得分点。' : '按教材范围选择知识点，生成练习并保存复习记录。'}</p></div>
-            {daily && <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs text-slate-500"><CalendarDays className="size-4 text-indigo-400" />{today || '今天'} · 每日更新</div>}
+            {daily && <div className="flex flex-col items-end gap-2"><div className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-xs text-slate-500"><CalendarDays className="size-4 text-indigo-400" />{today || '今天'} · 每日更新</div><Link href="/knowledge-library/history" className="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 hover:underline">历史练习 <ArrowRight className="size-4" /></Link></div>}
         </header>
         <p className="rounded-xl border border-indigo-100 bg-indigo-50/60 px-4 py-3 text-sm text-indigo-800">{recommendedGrade ? `当前年级：${recommendedGrade} · 跟随账户设置` : '尚未设置当前年级，可在账户设置中选择，也可在下方手动选择。'}</p>
         <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6">
             {daily ? <>
                 <div className="mb-4 flex items-center justify-between gap-3"><h2 className="text-sm font-semibold text-slate-700">选择题目来源</h2><div className="flex items-center gap-2"><div className="group relative" data-testid="daily-subject-menu"><button type="button" aria-label={`每日推荐科目：${subject}`} aria-haspopup="true" disabled={loading} className="inline-flex min-h-10 items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 focus-visible:outline-2 focus-visible:outline-indigo-500">{subject}<ChevronDown className="size-4" /></button><div className="invisible absolute right-0 top-full z-20 min-w-28 pt-1 opacity-0 transition-opacity group-hover:visible group-hover:opacity-100 group-focus-within:visible group-focus-within:opacity-100"><div className="rounded-xl border border-slate-200 bg-white p-1 shadow-lg" role="group" aria-label="选择每日推荐科目">{(['语文', '数学', '英语'] as const).map(name => <button key={name} type="button" aria-pressed={subject === name} disabled={loading} onClick={() => { if (subject !== name) { setSubject(name); setNotebookId(''); setSet(null); setError(''); } }} className={`block w-full rounded-lg px-3 py-2 text-left text-sm hover:bg-indigo-50 focus-visible:bg-indigo-50 ${subject === name ? 'font-semibold text-indigo-700' : 'text-slate-700'}`}>{name}</button>)}</div></div></div><div className="flex items-center gap-2"><select id="daily-count" aria-label="每日推荐题目数" className="h-10 rounded-lg border border-slate-200 bg-white px-2 text-sm text-slate-700" value={customDailyCount ? 'custom' : count} disabled={loading} onChange={event => { if (event.target.value === 'custom') { setCustomDailyCount(true); setCount(11); } else { setCustomDailyCount(false); setCount(Number(event.target.value)); } }}>{Array.from({ length: 10 }, (_, index) => index + 1).map(value => <option key={value} value={value}>{value} 道题</option>)}<option value="custom">自定义数量</option></select>{customDailyCount && <input aria-label="自定义每日推荐题目数" type="number" min={1} max={12} value={count} disabled={loading} onChange={event => setCount(Math.max(1, Math.min(12, Number(event.target.value) || 1)))} className="h-10 w-20 rounded-lg border border-slate-200 bg-white px-2 text-sm" />}</div></div></div>
-                <div className="mb-6 grid gap-3 sm:grid-cols-2">{([{ value: 'notebook', label: '我的错题本', description: `从${subject}错题知识点随机生成新题`, icon: BookOpen }, { value: 'network', label: '网络公开题库', description: `优先参考${subject}历年试卷高频与易错知识点，生成新题`, icon: Globe2 }] as const).map(item => <button key={item.value} onClick={() => { setSource(item.value); setNotebookId(''); }} disabled={loading} aria-pressed={source === item.value} className={`flex items-center gap-3 rounded-xl border p-4 text-left transition-colors ${source === item.value ? 'border-indigo-400 bg-indigo-50/50' : 'border-slate-200 hover:border-indigo-200'}`}><item.icon className={`size-5 shrink-0 ${source === item.value ? 'text-indigo-500' : 'text-slate-400'}`} /><div className="flex-1"><p className="text-sm font-medium text-slate-700">{item.label}</p><p className="mt-1 text-xs text-slate-400">{item.description}</p></div>{source === item.value && <CheckCircle2 className="size-4 text-indigo-500" />}</button>)}</div>
+                <div className="mb-6 grid gap-3 sm:grid-cols-2">{([{ value: 'notebook', label: '我的错题本', description: `从${subject}错题知识点随机生成新题`, icon: BookOpen }, { value: 'network', label: '网络公开题库', description: `优先参考${subject}历年试卷高频与易错知识点，生成新题`, icon: Globe2 }] as const).map(item => <button key={item.value} onClick={() => { setSource(item.value); setNotebookId(''); }} disabled={loading} aria-pressed={source === item.value} className={`flex items-center gap-3 rounded-xl border p-4 text-left transition-colors ${source === item.value ? 'border-indigo-400 bg-indigo-50/50' : 'border-slate-200 hover:border-indigo-200'}`}><item.icon className={`size-5 shrink-0 ${source === item.value ? 'text-indigo-500' : 'text-slate-400'}`} /><div className="flex-1"><p className="text-sm font-medium text-slate-700">{item.label}{item.value === 'network' && bankStats?.subject === subject && <span className="ml-2 text-xs font-normal text-slate-500">{bankStats.papers} 份 · {bankStats.questions} 题</span>}</p><p className="mt-1 text-xs text-slate-400">{item.description}</p></div>{source === item.value && <CheckCircle2 className="size-4 text-indigo-500" />}</button>)}</div>
+                <div className="-mt-3 mb-5 flex flex-wrap items-center justify-end gap-2 text-xs">{bankSync?.state === 'running' && <span role="status" className="text-indigo-600">更新中 {bankSync.processed}/{bankSync.discovered} · 新增 {bankSync.imported} 份</span>}{session?.user?.role === 'admin' && <button type="button" onClick={updateBank} disabled={bankUpdating || bankSync?.state === 'running'} className="rounded-md border border-indigo-200 px-2 py-1 text-indigo-700 hover:bg-indigo-50 disabled:opacity-50">{bankUpdating ? '启动中…' : '更新题库'}</button>}{bankMessage && <span role="status" className="text-slate-600">{bankMessage}</span>}</div>
             </> : <>
                 <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><h2 className="text-base font-semibold text-slate-900">选择教材与出题范围</h2><div className="flex items-center gap-2"><Link href="/knowledge-library/history" className="inline-flex min-h-10 items-center whitespace-nowrap rounded-lg border border-slate-200 px-3 text-sm text-indigo-700">历史练习</Link><Button type="button" variant="outline" className="min-h-10" aria-expanded={showFilters} aria-controls="learning-filters" onClick={() => setShowFilters(value => !value)}>筛选<ChevronDown className={`ml-2 size-4 transition-transform ${showFilters ? 'rotate-180' : ''}`} /></Button></div></div>
             </>}
@@ -294,7 +327,7 @@ export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
                 {generationType === 'paper' && <p className="rounded-xl bg-indigo-50 p-3 text-sm text-indigo-900">按上方出版社、科目、年级和册别组卷。已选 {selectedUnitIds.length} 个章节；未选章节时从当前筛选范围内所有已核对的知识点随机出题。每套 6 题，不依赖试卷库。</p>}
                 <div className="flex flex-col gap-3 border-t border-indigo-100 pt-4 sm:flex-row sm:items-center sm:justify-between"><p className="text-xs text-slate-500">练习自动保存，生成后可下载或打印。</p><Button className="h-11 w-full rounded-xl bg-indigo-600 px-6 hover:bg-indigo-700 sm:w-auto" disabled={loading || initialLoading || !gradeProfileLoaded || (generationType === 'chapters' && !selectedUnitIds.length)} onClick={() => generationType === 'custom' ? generate() : generateScoped(generationType)}>{loading && <Loader2 className="mr-2 size-4 animate-spin" />}{loading ? '正在准备练习…' : generationType === 'custom' ? '生成专属练习' : generationType === 'chapters' ? '按所选章节出题' : '试卷出题'}{!loading && <ArrowRight className="ml-2 size-4" />}</Button></div>
             </section>}
-            {daily && <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-5"><p className="max-w-lg text-xs leading-6 text-slate-400">每天按所选科目、来源和数量生成一组题，同一组选项当天保持不变。</p><Button onClick={generate} disabled={loading || initialLoading} className="h-11 rounded-xl bg-indigo-500 px-6 shadow-sm hover:bg-indigo-600">{loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <GraduationCap className="mr-2 size-4" />}{loading ? '正在准备练习…' : '获取今日推荐'}{!loading && <ArrowRight className="ml-2 size-4" />}</Button></div>}
+            {daily && <div className="mt-6 flex flex-wrap items-center justify-between gap-4 border-t border-slate-100 pt-5"><p className="max-w-lg text-xs leading-6 text-slate-400">每次获取都会生成新题，并避开历史练习中的重复题目；旧题仍可在历史练习中查看。</p><Button onClick={generate} disabled={loading || initialLoading} className="h-11 rounded-xl bg-indigo-500 px-6 shadow-sm hover:bg-indigo-600">{loading ? <Loader2 className="mr-2 size-4 animate-spin" /> : <GraduationCap className="mr-2 size-4" />}{loading ? '正在准备练习…' : '获取今日推荐'}{!loading && <ArrowRight className="ml-2 size-4" />}</Button></div>}
         </section>
         </>}
         {error && <div role="alert" className="rounded-xl border border-red-100 bg-red-50 p-4 text-sm leading-6 text-red-600">{error}{error.includes('AI') && <span> <button className="underline" onClick={() => window.dispatchEvent(new Event('open-app-settings'))}>打开设置</button></span>}{pendingLearningTask(mode) && <button className="ml-3 rounded-lg border border-red-200 bg-white px-3 py-1 text-red-700" disabled={loading} onClick={async () => { setLoading(true); setError(''); try { const result=await retryLearningTask(mode,setProgress); setSet(result); setExerciseView(true); window.history.replaceState(null,'',`${daily?'/daily':'/ai-practice'}?set=${encodeURIComponent(result.id)}`); } catch (failure) { setError(messageFor(failure)); } finally { setLoading(false); } }}>重试上次任务</button>}</div>}
@@ -310,10 +343,3 @@ export function LearningWorkspace({ mode }: { mode: 'daily' | 'ai' }) {
         {daily && !set && !loading && !initialLoading && <div className="rounded-2xl border border-dashed border-slate-200 py-10 text-center"><span className="mx-auto flex size-12 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-300"><BookOpen className="size-6" /></span><p className="mt-4 text-sm font-medium text-slate-600">今天的进步，从这里开始</p><p className="mt-2 text-xs text-slate-400">选择上方选项，点击按钮开始练习。</p><Link href="/notebooks" className="mt-4 inline-flex text-xs text-indigo-500 hover:underline">先去整理我的错题本 <ArrowRight className="ml-1 size-3" /></Link></div>}
     </main>;
 }
-
-
-
-
-
-
-

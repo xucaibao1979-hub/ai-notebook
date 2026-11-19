@@ -5,6 +5,7 @@ import { OpenAIProvider } from '@/lib/ai/openai-provider';
 import { GeminiProvider } from '@/lib/ai/gemini-provider';
 import { AzureOpenAIProvider } from '@/lib/ai/azure-provider';
 import { createLogger } from '@/lib/logger';
+import { codexLoginStatus } from '@/lib/ai/codex-cli';
 
 const logger = createLogger('api:ai:test');
 
@@ -75,6 +76,8 @@ export interface AITestRequest {
     baseUrl?: string;
     model?: string;
     apiMode?: 'chat' | 'responses';
+    authMode?: 'codex-cli';
+    providerId?: string;
     // Azure 特有
     endpoint?: string;
     deploymentName?: string;
@@ -101,10 +104,15 @@ export async function POST(request: NextRequest) {
         }
 
         const body: AITestRequest = await request.json();
-        const { provider, apiKey, baseUrl, model, apiMode, endpoint, deploymentName, apiVersion, language = 'zh' } = body;
+        const { provider, apiKey, baseUrl, model, apiMode, authMode, providerId, endpoint, deploymentName, apiVersion, language = 'zh' } = body;
 
-        if (!provider || !apiKey) {
+        if (!provider || (!apiKey && authMode !== 'codex-cli')) {
             return NextResponse.json({ error: 'Missing provider or apiKey' }, { status: 400 });
+        }
+        if (authMode === 'codex-cli') {
+            if (session.user.role !== 'admin' || providerId !== 'codex' || provider !== 'openai') return NextResponse.json({ error: '不允许使用该登录模式' }, { status: 403 });
+            const status = await codexLoginStatus();
+            if (!status.loggedIn) return NextResponse.json({ success: false, textSupport: false, visionSupport: false, textError: '请先完成 Codex 网页登录' });
         }
 
         logger.info({ provider, model, baseUrl: baseUrl || endpoint }, 'AI 连接测试开始');
@@ -117,7 +125,7 @@ export async function POST(request: NextRequest) {
 
         // 辅助函数：判断错误是否为配置/连接问题（不应继续文本测试）
         const isConfigError = (errorCode: string) => {
-            return ['AI_AUTH_ERROR', 'AI_CONNECTION_FAILED', 'AI_TIMEOUT_ERROR',
+            return ['AI_AUTH_ERROR', 'AI_CONNECTION_FAILED', 'AI_TIMEOUT_ERROR', 'AI_NOT_FOUND',
                 'AI_QUOTA_EXCEEDED', 'AI_PERMISSION_DENIED', 'AI_SERVICE_UNAVAILABLE'].includes(errorCode);
         };
 
@@ -125,7 +133,7 @@ export async function POST(request: NextRequest) {
         // 测试 1: 视觉（多模态）能力
         try {
             if (provider === 'openai') {
-                const openai = new OpenAIProvider({ apiKey, baseUrl, model, apiMode });
+                const openai = new OpenAIProvider({ apiKey, baseUrl, model, apiMode, authMode, providerId });
                 const result = await openai.analyzeImage(TEST_IMAGE_BASE64, TEST_IMAGE_MIME, language);
                 if (result.questionText || result.analysis) {
                     // 视觉成功 → 文本和视觉都支持，一步完成
@@ -180,7 +188,7 @@ export async function POST(request: NextRequest) {
         if (!textSupport && !textError) {
             try {
                 if (provider === 'openai') {
-                    const openai = new OpenAIProvider({ apiKey, baseUrl, model, apiMode });
+                    const openai = new OpenAIProvider({ apiKey, baseUrl, model, apiMode, authMode, providerId });
                     const result = await openai.generateSimilarQuestion(
                         '1+1=?',
                         ['基础算术'],

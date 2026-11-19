@@ -3,6 +3,8 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import type { LibraryQuestion } from '@/lib/knowledge-library';
+import { shuffleQuestions } from '@/lib/learning';
+import { rotateQuestionTypes } from '@/lib/public-question-bank';
 
 const subjects = ['语文', '数学', '英语', '物理', '化学', '生物', '历史', '地理', '政治'];
 
@@ -24,11 +26,11 @@ export async function GET() {
             select: { id: true, title: true, subject: true, year: true, examGrade: true, sourceName: true, sourceUrl: true, fetchedAt: true, questions: true },
             orderBy: { fetchedAt: 'desc' }, take: 100,
         });
-        const items = papers.map(paper => {
+        const items = shuffleQuestions(papers).map(paper => {
             let questions: LibraryQuestion[] = [];
             try { const parsed: unknown = JSON.parse(paper.questions); if (Array.isArray(parsed)) questions = parsed; } catch { /* Skip malformed entries. */ }
             const points = [...new Set(questions.flatMap(question => Array.isArray(question.knowledgePoints) ? question.knowledgePoints.filter((point): point is string => typeof point === 'string' && !!point.trim()) : []))];
-            const types = [...new Set(questions.map(questionType))];
+            const types = [...new Set(rotateQuestionTypes(questions, questionType).map(questionType))];
             return { id: paper.id, title: paper.title, subject: paper.subject, year: paper.year, examGrade: paper.examGrade, sourceName: paper.sourceName, sourceUrl: paper.sourceUrl, fetchedAt: paper.fetchedAt.toISOString(), questionCount: questions.length, types, knowledgePoints: points.slice(0, 30), moreKnowledgePoints: Math.max(0, points.length - 30) };
         }).filter(item => item.questionCount > 0);
         return NextResponse.json({ items });

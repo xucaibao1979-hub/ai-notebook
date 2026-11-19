@@ -1,18 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('@/lib/error-solution',()=>({prepareErrorSolution:vi.fn(async()=>({answerText:'正确答案',analysis:'先确认条件，再逐步求解'}))}));
 import { learningDateKey, learningRequestSchema, buildLearningBrief } from '@/lib/learning';
-import { parseQuestionCsv } from '@/lib/public-question-bank';
+import { parseQuestionCsv, questionKey, rotateQuestionTypes } from '@/lib/public-question-bank';
 
 const mocks = vi.hoisted(() => ({
     findUser: vi.fn(), findNotebook: vi.fn(), findErrors: vi.fn(),
-    findSet: vi.fn(), findHistory:vi.fn(), upsertSet: vi.fn(), createSet: vi.fn(),
+    findSet: vi.fn(), findHistory:vi.fn(), findSets:vi.fn(), upsertSet: vi.fn(), createSet: vi.fn(),
     review:vi.fn(),ai: vi.fn(), publicBank: vi.fn(), getAI: vi.fn(), papers: vi.fn(), findPaper: vi.fn(), evidence: vi.fn(),
 }));
 vi.mock('@/lib/prisma', () => ({ prisma: {
     user: { findUnique: mocks.findUser }, subject: { findFirst: mocks.findNotebook }, errorItem: { findMany: mocks.findErrors },
     knowledgePaper: { findMany: mocks.papers, findUnique: mocks.findPaper },
     textbookEvidence: { findMany: mocks.evidence },
-    learningSet: { findUnique: mocks.findSet, findFirst:mocks.findHistory, upsert: mocks.upsertSet, create: mocks.createSet },
+    learningSet: { findUnique: mocks.findSet, findFirst:mocks.findHistory, findMany:mocks.findSets, upsert: mocks.upsertSet, create: mocks.createSet },
 } }));
 vi.mock('@/lib/ai', () => ({ getAIService: mocks.getAI }));
 vi.mock('@/lib/public-question-bank', async importOriginal => {
@@ -26,6 +26,7 @@ beforeEach(() => {
     mocks.findUser.mockResolvedValue({ currentGrade: 12, educationStage: 'senior_high', enrollmentYear: 2024 });
     mocks.papers.mockResolvedValue([]);
     mocks.findErrors.mockResolvedValue([]);
+    mocks.findSets.mockResolvedValue([]);
     mocks.evidence.mockResolvedValue([]);
     mocks.findPaper.mockResolvedValue(null);
     mocks.publicBank.mockResolvedValue([]);
@@ -50,6 +51,11 @@ describe('learning requests and source parsing', () => {
         const rows = parseQuestionCsv(',Question,A,B,C,D,Answer\r\n1,"第一行,内容\n第二行""引用""",甲,乙,丙,丁,B\r\n');
         expect(rows).toEqual([{ '': '1', Question: '第一行,内容\n第二行"引用"', A: '甲', B: '乙', C: '丙', D: '丁', Answer: 'B' }]);
     });
+    it('normalizes equivalent question text and cycles available types', () => {
+        expect(questionKey('Ａ． 选择\n题')).toBe(questionKey('A.选择题'));
+        const rotated = rotateQuestionTypes(['选择1','选择2','选择3','填空1','填空2','计算1'], item => item.slice(0,2));
+        expect(new Set(rotated.slice(0,3).map(item => item.slice(0,2)))).toEqual(new Set(['选择','填空','计算']));
+    });
     it('passes subject, grade and user requirements into the generation brief', () => {
         const request = learningRequestSchema.parse({ mode: 'ai', source: 'ai', subject: '历史', grade: '初二', prompt: '考察时间线', knowledgePoint: '唐朝' });
         expect(buildLearningBrief(request, '唐朝', '概念辨析')).toContain('历史');
@@ -59,6 +65,19 @@ describe('learning requests and source parsing', () => {
 });
 
 describe('generation and daily persistence', () => {
+    it('retries historical text and refuses an incomplete unique daily set', async () => {
+        mocks.findSets.mockResolvedValue([{questions:JSON.stringify([{questionText:'旧 题'}])}]);
+        mocks.ai.mockResolvedValue({questionText:'旧题',answerText:'答案',analysis:'解析'});
+        await expect(generateExercises('user',learningRequestSchema.parse({mode:'daily',source:'network',subject:'数学',count:2}))).rejects.toThrow('历史内容重复');
+        expect(mocks.ai).toHaveBeenCalledTimes(4);
+    });
+    it('retries an old question before returning a new one', async () => {
+        mocks.findSets.mockResolvedValue([{questions:JSON.stringify([{questionText:'旧题'}])}]);
+        mocks.ai.mockResolvedValueOnce({questionText:'旧 题',answerText:'答案',analysis:'解析'}).mockResolvedValueOnce({questionText:'新题',answerText:'答案',analysis:'解析'});
+        const result=await generateExercises('user',learningRequestSchema.parse({mode:'ai',source:'ai',subject:'数学',count:1}));
+        expect(result[0].questionText).toBe('新题');
+        expect(mocks.ai).toHaveBeenCalledTimes(2);
+    });
     it('uses the current grade instead of an old source question grade', async () => {
         mocks.findUser.mockResolvedValue({ currentGrade: 8 });
         mocks.findErrors.mockResolvedValue([{ masteryLevel:0,createdAt:new Date(),reviewSchedules:[], id: 'old', questionText: '原题', gradeSemester: '初三', subject: { name: '数学' }, tags: [] }]);
@@ -70,7 +89,7 @@ describe('generation and daily persistence', () => {
         const resolvers:((value:object)=>void)[]=[];
         mocks.ai.mockImplementation(()=>new Promise(resolve=>resolvers.push(resolve)));
         const pending=generateExercises('user',learningRequestSchema.parse({mode:'daily',source:'notebook',subject:'数学',count:3}));
-        for(let i=0;i<20&&resolvers.length<3;i++)await Promise.resolve();
+        for(let i=0;i<100&&resolvers.length<3;i++)await Promise.resolve();
         expect(resolvers).toHaveLength(3);
         expect(mocks.ai.mock.calls.every(call=>call[0].includes('知识点'))).toBe(true);
         resolvers.forEach((resolve,index)=>resolve({questionText:`新题 ${index}`,answerText:'答案',analysis:'解析',knowledgePoints:[]}));
@@ -177,6 +196,13 @@ describe('generation and daily persistence', () => {
         expect(mocks.publicBank).not.toHaveBeenCalled();
         expect(mocks.ai).not.toHaveBeenCalled();
     });
+    it('excludes historical public references from daily prompts', async () => {
+        mocks.findSets.mockResolvedValue([{questions:JSON.stringify([{questionText:'已用题库题'}])}]);
+        mocks.publicBank.mockResolvedValue(['已用题库题','未用题库题'].map(questionText=>({questionText,answerText:'答案',analysis:'解析',subject:'数学',knowledgePoints:[],provenance:{name:'公开题库'}})));
+        await generateExercises('user',learningRequestSchema.parse({mode:'daily',source:'network',subject:'数学',count:1}));
+        expect(mocks.ai.mock.calls[0][0]).not.toContain('已用题库题');
+        expect(mocks.ai.mock.calls[0][0]).toContain('未用题库题');
+    });
     it('uses public questions as references for an AI-generated recommendation', async () => {
         mocks.publicBank.mockResolvedValue([1,2,3].map(i=>({ questionText: `题库题 ${i}`, answerText: 'B', analysis:'解析', subject: '数学', knowledgePoints:['加法'], provenance:{name:'公开题库',url:'https://example.test'} })));
         const request = learningRequestSchema.parse({ mode: 'daily', source: 'network', subject: '数学', count: 1 });
@@ -247,6 +273,16 @@ describe('daily recommendation evidence and subject isolation',()=>{
         const keys=mocks.upsertSet.mock.calls.map(call=>call[0].create.selectionKey);
         expect(new Set(keys).size).toBe(3);
         expect(mocks.upsertSet.mock.calls.map(call=>JSON.parse(call[0].create.questions)[0].subject)).toEqual(['语文','数学','英语']);
+    });
+    it('creates a distinct saved daily set for each explicit refresh', async () => {
+        mocks.findSet.mockResolvedValue(null);
+        mocks.upsertSet.mockImplementation(async ({create}) => ({...create,id:'new',records:[]}));
+        const base = {mode:'daily',source:'network',subject:'数学',count:1};
+        await getOrCreateLearningSet('user', learningRequestSchema.parse({...base,refreshId:'11111111-1111-4111-8111-111111111111'}));
+        await getOrCreateLearningSet('user', learningRequestSchema.parse({...base,refreshId:'22222222-2222-4222-8222-222222222222'}));
+        const keys = mocks.upsertSet.mock.calls.map(call => call[0].create.selectionKey);
+        expect(new Set(keys).size).toBe(2);
+        expect(mocks.findSet).toHaveBeenCalledTimes(2);
     });
 });
 
