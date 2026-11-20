@@ -1,5 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, randomBytes, randomUUID, scryptSync } from 'node:crypto';
 import { execFile } from 'node:child_process';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import { promisify } from 'node:util';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -11,6 +13,51 @@ const dataRoot = path.join(root, 'data');
 const backupsRoot = path.join(dataRoot, 'backups');
 const restoresRoot = path.join(dataRoot, 'system-restore');
 const excludedData = new Set(['backups', 'logs', 'system-restore', 'app-window-profile']);
+const encryptedMagic = Buffer.from('AINB2ENC');
+const encryptedHeaderBytes = encryptedMagic.length + 16 + 12;
+
+function backupKey(password: string, salt: Buffer) {
+    if (password.length < 8 || password.length > 200) throw new Error('备份密码需要 8 至 200 个字符');
+    return scryptSync(password, salt, 32);
+}
+
+export async function encryptSystemArchive(archive: string, password: string) {
+    const salt = randomBytes(16);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', backupKey(password, salt), iv);
+    const encrypted = `${archive}.ainb`;
+    try {
+        await fs.writeFile(encrypted, Buffer.concat([encryptedMagic, salt, iv]));
+        await pipeline(createReadStream(archive), cipher, createWriteStream(encrypted, { flags: 'a' }));
+        await fs.appendFile(encrypted, cipher.getAuthTag());
+        return { file: encrypted, bytes: (await fs.stat(encrypted)).size };
+    } catch (error) {
+        await fs.rm(encrypted, { force: true });
+        throw error;
+    }
+}
+
+export async function decryptSystemArchive(encrypted: string, password: string) {
+    const output = `${encrypted}.tar.gz`;
+    const input = await fs.open(encrypted, 'r');
+    try {
+        const size = (await input.stat()).size;
+        if (size <= encryptedHeaderBytes + 16) throw new Error('加密备份文件不完整');
+        const header = Buffer.alloc(encryptedHeaderBytes);
+        await input.read(header, 0, header.length, 0);
+        if (!header.subarray(0, encryptedMagic.length).equals(encryptedMagic)) throw new Error('请选择本应用创建的加密备份');
+        const tag = Buffer.alloc(16);
+        await input.read(tag, 0, tag.length, size - tag.length);
+        const decipher = createDecipheriv('aes-256-gcm', backupKey(password, header.subarray(8, 24)), header.subarray(24, 36));
+        decipher.setAuthTag(tag);
+        await pipeline(createReadStream(encrypted, { start: encryptedHeaderBytes, end: size - 17 }), decipher, createWriteStream(output));
+        return output;
+    } catch (error) {
+        await fs.rm(output, { force: true });
+        if (error instanceof Error && /authenticate data/.test(error.message)) throw new Error('备份密码错误或文件已损坏');
+        throw error;
+    } finally { await input.close(); }
+}
 
 function tarExecutable() {
     return process.platform === 'win32'

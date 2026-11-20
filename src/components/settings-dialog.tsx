@@ -28,8 +28,7 @@ import { UserManagement } from "@/components/admin/user-management";
 import { ModelTaskPanel } from '@/components/model-task-panel';
 import { StudyCatalogPanel } from '@/components/study-catalog-panel';
 import { LearnerSwitcher } from '@/components/learner-switcher';
-import { CompleteBackupPanel } from '@/components/complete-backup-panel';
-import { BackupScopeInfo, SystemBackupPanel } from '@/components/system-backup-panel';
+import { SystemBackupPanel } from '@/components/system-backup-panel';
 import { AccountSettings } from '@/components/admin/account-settings';
 import { PROVIDER_PRESETS, ProviderPreset } from '@/lib/ai/provider-presets';
 import { GradePicker } from '@/components/grade-picker';
@@ -987,8 +986,6 @@ export function SettingsDialog({ sidebar = false, hideTrigger = false }: { sideb
                                 </Button>
                             </div>
                         )}
-                        <CompleteBackupPanel />
-                        <BackupScopeInfo />
                         {(session?.user as any)?.role === 'admin' && <SystemBackupPanel />}
                     </TabsContent>
 

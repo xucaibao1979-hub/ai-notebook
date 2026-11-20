@@ -36,11 +36,14 @@ it('archives and restores the database, configuration, question bank and images'
         await fs.copyFile(database, target);
     });
     const cwd = vi.spyOn(process, 'cwd').mockReturnValue(temporary);
-    const { createSystemArchive, inspectSystemArchive, restoreSystemArchive } = await import('@/lib/system-backup');
+    const { createSystemArchive, encryptSystemArchive, decryptSystemArchive, inspectSystemArchive, restoreSystemArchive } = await import('@/lib/system-backup');
     cwd.mockRestore();
 
     const archive = await createSystemArchive();
-    const inspected = await inspectSystemArchive(archive.file);
+    const encrypted = await encryptSystemArchive(archive.file, 'correct horse battery');
+    await expect(decryptSystemArchive(encrypted.file, 'wrong-password')).rejects.toThrow('备份密码错误');
+    const decrypted = await decryptSystemArchive(encrypted.file, 'correct horse battery');
+    const inspected = await inspectSystemArchive(decrypted);
     expect(inspected.users).toBe(1);
     expect(inspected.files).toBeGreaterThan(4);
     await fs.writeFile(path.join(temporary, 'config', 'app-config.json'), '{"aiProvider":"gemini"}');
