@@ -38,10 +38,11 @@ export function SystemBackupPanel() {
     }
 
     async function restoreBackup() {
-        if (!restoreFile || restorePassword.length < 8) { setMessage('请选择加密备份文件并输入原始密码。'); return; }
+        const legacy = !!restoreFile && /\.(tar\.gz|tgz)$/i.test(restoreFile.name);
+        if (!restoreFile || !legacy && restorePassword.length < 8) { setMessage('请选择备份文件并输入原始密码。'); return; }
         setBusy(true); setMessage('正在解密并校验备份…');
         try {
-            const response = await fetch('/api/system-backup', { method: 'PUT', headers: { 'X-Backup-Password': restorePassword }, body: restoreFile });
+            const response = await fetch('/api/system-backup', { method: 'PUT', headers: legacy ? { 'X-Backup-Format': 'legacy-tar' } : { 'X-Backup-Password': restorePassword }, body: restoreFile });
             const inspection = await response.json() as Inspection;
             if (!response.ok) throw new Error(inspection.message || '备份校验失败');
             if (!window.confirm(`备份校验通过：${inspection.users} 个账户、${inspection.files} 个文件，创建于 ${new Date(inspection.createdAt).toLocaleString('zh-CN')}。恢复将替换当前配置及全部学习数据；恢复前会保存当前快照。继续吗？`)) { setMessage('备份已校验，未执行恢复。'); return; }
@@ -51,6 +52,18 @@ export function SystemBackupPanel() {
             setMessage('恢复完成。请重新启动应用，使用备份中的账户登录。');
             setRestorePassword(''); setRestoreFile(null);
         } catch (error) { setMessage(error instanceof Error ? error.message : '恢复失败'); }
+        finally { setBusy(false); }
+    }
+
+    async function restoreAuto(date: string) {
+        if (!window.confirm(`恢复 ${date} 的系统配置？现有配置会先备份，随后需要重新启动应用。`)) return;
+        setBusy(true);
+        try {
+            const response = await fetch('/api/system-backup', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'restore-config', date }) });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.message || '配置恢复失败');
+            setMessage('配置已恢复。请重新启动应用。');
+        } catch (error) { setMessage(error instanceof Error ? error.message : '配置恢复失败'); }
         finally { setBusy(false); }
     }
 
@@ -64,11 +77,11 @@ export function SystemBackupPanel() {
             <div className="rounded-xl border border-slate-200 bg-slate-100 p-5">
                 <div className="flex gap-4"><span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-slate-600 text-white shadow-sm"><Upload className="size-6" /></span><div><h3 className="text-base font-semibold text-slate-900">恢复配置</h3><p className="mt-1 text-slate-600">从加密备份导入；先备份当前数据。</p></div></div>
                 <ul className="mt-3 space-y-1 text-xs text-slate-600 sm:ml-16"><li>✓ 校验密码与文件完整性</li><li>✓ 恢复前保存当前快照</li><li>✓ 恢复后重新启动应用</li></ul>
-                <div className="mt-4 space-y-2 sm:ml-16"><input aria-label="选择加密备份文件" type="file" accept=".ainb" disabled={busy} onChange={event => setRestoreFile(event.target.files?.[0] || null)} className="block w-full max-w-xs text-xs" /><input aria-label="输入原始备份密码" type="password" autoComplete="off" placeholder="输入创建备份时的密码" value={restorePassword} onChange={event => setRestorePassword(event.target.value)} className="h-10 w-full max-w-xs rounded-lg border border-slate-200 bg-white px-3" /><Button disabled={busy} onClick={restoreBackup} className="bg-slate-700 hover:bg-slate-800"><Upload className="mr-2 size-4" />恢复备份</Button></div>
+                <div className="mt-4 space-y-2 sm:ml-16"><input aria-label="选择加密备份文件" type="file" accept=".ainb,.tar.gz,.tgz" disabled={busy} onChange={event => setRestoreFile(event.target.files?.[0] || null)} className="block w-full max-w-xs text-xs" /><input aria-label="输入原始备份密码" type="password" autoComplete="off" placeholder="输入创建备份时的密码；旧版 tar.gz 无需密码" value={restorePassword} onChange={event => setRestorePassword(event.target.value)} className="h-10 w-full max-w-xs rounded-lg border border-slate-200 bg-white px-3" /><Button disabled={busy} onClick={restoreBackup} className="bg-slate-700 hover:bg-slate-800"><Upload className="mr-2 size-4" />恢复备份</Button></div>
             </div>
         </div>
         <p className="text-xs text-amber-800">备份包含账户和模型密钥，请妥善保存文件与密码。局域网 HTTP 传输不加密；Codex 网页登录令牌、浏览器会话、旧备份和运行日志不导出。</p>
-        <details className="rounded-xl border border-slate-200 bg-white p-4"><summary className="cursor-pointer font-medium text-slate-700">自动备份记录（{auto.length} 天）</summary><p className="mt-2 text-xs text-slate-500">应用运行时每小时备份数据库与学习记录，每天另存系统配置。</p><div className="mt-3 space-y-1 text-xs text-slate-600">{auto.length ? auto.map(item => <p key={item.date}>{item.date} · 配置备份 {(item.bytes / 1024).toFixed(0)} KB</p>) : <p>尚无自动备份记录；启动约 1 分钟后首次生成。</p>}</div></details>
+        <details className="rounded-xl border border-slate-200 bg-white p-4"><summary className="cursor-pointer font-medium text-slate-700">自动备份记录（{auto.length} 天）</summary><p className="mt-2 text-xs text-slate-500">应用运行时每小时备份数据库与学习记录，每天另存系统配置。</p><div className="mt-3 space-y-2 text-xs text-slate-600">{auto.length ? auto.map(item => <div key={item.date} className="flex flex-wrap items-center gap-3 rounded-lg border p-2"><span>{item.date} · 配置备份 {(item.bytes / 1024).toFixed(0)} KB</span><a className="text-blue-700" href={`/api/system-backup?configDate=${item.date}`}>下载</a><button type="button" className="text-blue-700 disabled:opacity-50" disabled={busy} onClick={() => restoreAuto(item.date)}>恢复这天配置</button></div>) : <p>尚无自动备份记录；启动约 1 分钟后首次生成。</p>}</div></details>
         {message && <p role="status" className="rounded-lg border border-blue-100 bg-blue-50 p-3 text-blue-800">{message}</p>}
     </section>;
 }
