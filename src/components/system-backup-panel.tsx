@@ -67,17 +67,17 @@ export function SystemBackupPanel() {
         finally { setBusy(false); }
     }
 
-    return <section aria-label="备份与恢复" className="space-y-4 text-sm">
-        <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-blue-100 bg-blue-50 p-5">
-                <div className="flex gap-4"><span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm"><Box className="size-6" /></span><div><h3 className="text-base font-semibold text-slate-900">导出配置</h3><p className="mt-1 text-slate-600">创建完整系统加密备份。</p></div></div>
-                <ul className="mt-3 space-y-1 text-xs text-slate-600 sm:ml-16"><li>✓ 账户、模型与系统设置</li><li>✓ 题库、推荐历史、错题和图片</li><li>✓ AES-256-GCM 加密</li></ul>
-                <div className="mt-4 space-y-2 sm:ml-16"><input aria-label="设置备份密码" type="password" autoComplete="new-password" placeholder="设置备份密码（至少 8 位）" value={exportPassword} onChange={event => setExportPassword(event.target.value)} className="h-10 w-full max-w-xs rounded-lg border border-slate-200 bg-white px-3" /><Button disabled={busy} onClick={exportBackup} className="bg-blue-600 hover:bg-blue-700"><Download className="mr-2 size-4" />创建备份</Button></div>
+    return <section aria-label="备份与恢复" className="space-y-3 text-sm">
+        <div className="grid gap-3 md:grid-cols-2">
+            <div className="rounded-xl border border-blue-100 bg-blue-50 p-4">
+                <div className="flex items-center gap-3"><span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-blue-500 text-white shadow-sm"><Box className="size-5" /></span><div><h3 className="font-semibold text-slate-900">导出配置</h3><p className="text-xs text-slate-600">创建完整系统加密备份</p></div></div>
+                <p className="mt-2 text-xs leading-5 text-slate-600">账户、模型、题库、错题和图片 · AES-256-GCM 加密</p>
+                <div className="mt-3 flex flex-wrap items-center gap-2"><input aria-label="设置备份密码" type="password" autoComplete="new-password" placeholder="备份密码（至少 8 位）" value={exportPassword} onChange={event => setExportPassword(event.target.value)} className="h-9 min-w-40 flex-1 rounded-lg border border-slate-200 bg-white px-3" /><Button size="sm" disabled={busy} onClick={exportBackup} className="h-9 bg-blue-600 hover:bg-blue-700"><Download className="mr-1 size-4" />创建备份</Button></div>
             </div>
-            <div className="rounded-xl border border-slate-200 bg-slate-100 p-5">
-                <div className="flex gap-4"><span className="flex size-12 shrink-0 items-center justify-center rounded-lg bg-slate-600 text-white shadow-sm"><Upload className="size-6" /></span><div><h3 className="text-base font-semibold text-slate-900">恢复配置</h3><p className="mt-1 text-slate-600">从加密备份导入；先备份当前数据。</p></div></div>
-                <ul className="mt-3 space-y-1 text-xs text-slate-600 sm:ml-16"><li>✓ 校验密码与文件完整性</li><li>✓ 恢复前保存当前快照</li><li>✓ 恢复后重新启动应用</li></ul>
-                <div className="mt-4 space-y-2 sm:ml-16"><input aria-label="选择加密备份文件" type="file" accept=".ainb,.tar.gz,.tgz" disabled={busy} onChange={event => setRestoreFile(event.target.files?.[0] || null)} className="block w-full max-w-xs text-xs" /><input aria-label="输入原始备份密码" type="password" autoComplete="off" placeholder="输入创建备份时的密码；旧版 tar.gz 无需密码" value={restorePassword} onChange={event => setRestorePassword(event.target.value)} className="h-10 w-full max-w-xs rounded-lg border border-slate-200 bg-white px-3" /><Button disabled={busy} onClick={restoreBackup} className="bg-slate-700 hover:bg-slate-800"><Upload className="mr-2 size-4" />恢复备份</Button></div>
+            <div className="rounded-xl border border-slate-200 bg-slate-100 p-4">
+                <div className="flex items-center gap-3"><span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-slate-600 text-white shadow-sm"><Upload className="size-5" /></span><div><h3 className="font-semibold text-slate-900">恢复配置</h3><p className="text-xs text-slate-600">从加密备份导入</p></div></div>
+                <p className="mt-2 text-xs leading-5 text-slate-600">校验后恢复 · 自动保存当前快照 · 旧版 tar.gz 可导入</p>
+                <div className="mt-3 flex flex-wrap items-center gap-2"><label className="inline-flex h-9 max-w-32 cursor-pointer items-center rounded-lg border border-slate-300 bg-white px-3 text-xs text-slate-700"><span className="truncate">{restoreFile?.name || '选择备份'}</span><input aria-label="选择加密备份文件" type="file" accept=".ainb,.tar.gz,.tgz" disabled={busy} onChange={event => setRestoreFile(event.target.files?.[0] || null)} className="sr-only" /></label><input aria-label="输入原始备份密码" type="password" autoComplete="off" placeholder="原始密码" value={restorePassword} onChange={event => setRestorePassword(event.target.value)} className="h-9 min-w-40 flex-1 rounded-lg border border-slate-200 bg-white px-3" /><Button size="sm" disabled={busy} onClick={restoreBackup} className="h-9 bg-slate-700 hover:bg-slate-800"><Upload className="mr-1 size-4" />恢复备份</Button></div>
             </div>
         </div>
         <p className="text-xs text-amber-800">备份包含账户和模型密钥，请妥善保存文件与密码。局域网 HTTP 传输不加密；Codex 网页登录令牌、浏览器会话、旧备份和运行日志不导出。</p>
